@@ -7,59 +7,81 @@
 ```
 pkg/
 ├── pkg.sh              # Package system entry point / CLI
-├── package-config      # Menuconfig-based package selection
+├── package-config      # Plain-text package selection
 └── available/
     └── <name>/
         └── package.mk  # Package metadata and build rules
 ```
 
-## API Reference
+## Usage
 
-| Command         | Description                                             |
-|-----------------|---------------------------------------------------------|
-| `list`          | List all available and enabled packages                 |
-| `info`          | Show detailed information about a package               |
-| `enable`        | Mark a package as enabled in the configuration          |
-| `disable`       | Mark a package as disabled in the configuration         |
-| `register`      | Register a package into the build system                |
-| `build`         | Build a single package (download, extract, compile)     |
-| `build-all`     | Build all enabled packages                              |
-| `install`       | Install a single package into the staging directory     |
-| `install-all`   | Install all built packages into the staging directory   |
-| `clean`         | Clean a single package's build artifacts                |
-| `clean-all`     | Clean all package build artifacts                       |
-| `menuconfig`    | Interactive package selection via ncurses menu          |
-
-## `package.mk` Format
-
-```make
-PKG_NAME        := example
-PKG_VERSION     := 1.0.0
-PKG_SOURCE      := https://example.com/example-1.0.0.tar.gz
-PKG_LICENSE     := GPL-2.0
-PKG_DEPENDS     := zlib openssl
-PKG_DESCRIPTION := Example package description
-
-define pkg_build
-    $(MAKE) -C $(PKG_BUILD_DIR) all
-endef
-
-define pkg_install
-    $(MAKE) -C $(PKG_BUILD_DIR) DESTDIR=$(PKG_INSTALL_DIR) install
-endef
+```bash
+cd pkg
+bash pkg.sh list               # list packages (✓=enabled ○=disabled)
+bash pkg.sh enable <name>      # enable a package
+bash pkg.sh disable <name>     # disable a package
+bash pkg.sh build-all          # build all enabled packages
+bash pkg.sh install-all        # copy built packages to rootfs staging
 ```
 
-## Seed Packages
+## `package.mk` Example (`hello-world`)
 
-- dropbear — lightweight SSH server and client
-- openssl — cryptography and SSL/TLS toolkit
-- zlib — compression library
-- mtd-utils — Memory Technology Device utilities
-- alsa-lib / alsa-utils — ALSA sound library and utilities
-- lzo — real-time data compression library
-- i2c-tools — I2C bus inspection and manipulation tools
-- strace — system call tracer
-- coreutils — basic GNU file, shell and text utilities
+```bash
+# Metadata
+PKG_NAME="hello-world"
+PKG_VERSION="1.0"
+PKG_LICENSE="MIT"
+PKG_DEPENDS=""
+PKG_DESCRIPTION="Example package: prints Hello, RV1106!"
+
+# Build: copy source from src/hello-world/ and compile
+pkg_build() {
+    cp -a "${BASE_DIR}"/src/hello-world/* "${PKG_BUILD_DIR}/"
+    make -C "${PKG_BUILD_DIR}" \
+        CC="${CROSS_COMPILE}gcc" \
+        CFLAGS="-Os -Wall" \
+        LDFLAGS="-static"
+}
+
+# Install: make install into PKG_INSTALL_DIR
+pkg_install() {
+    make -C "${PKG_BUILD_DIR}" \
+        DESTDIR="${PKG_INSTALL_DIR}" \
+        install
+}
+```
+
+## How It Works
+
+1. `build-one` sources `package.mk` and calls `pkg_build` (compile source)
+2. Then calls `pkg_install` (copy artifacts to `PKG_INSTALL_DIR`)
+3. `install-all` copies `PKG_INSTALL_DIR/*` → `${ROOTFS_DIR}/`
+4. `03-build-rootfs.sh` creates the ext4 image from `${ROOTFS_DIR}`
+
+Variables available in `package.mk`:
+- `BASE_DIR` — SDK root (e.g. `/home/.../pwncube-sdk`)
+- `CROSS_COMPILE` — toolchain prefix
+- `PKG_BUILD_DIR` — temp build directory
+- `PKG_INSTALL_DIR` — temp install directory
+- `ROOTFS_DIR` — rootfs staging area
+
+## Writing a New Package
+
+```
+src/<name>/       # source code (Makefile + sources)
+  ├── Makefile
+  └── main.c
+
+pkg/available/<name>/package.mk   # package descriptor
+```
+
+Enable and build:
+
+```bash
+bash pkg.sh enable <name>
+bash pkg.sh build <name>
+bash pkg.sh install <name>
+```
 
 ---
 

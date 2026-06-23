@@ -201,8 +201,8 @@ main() {
     build_busybox
     prepare_rootfs
     strip_rootfs
-    create_image
     install_packages
+    create_image
 
     log "=== Rootfs build complete ==="
     log "Image: ${ROOTFS_IMG}"

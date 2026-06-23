@@ -120,7 +120,7 @@ cmd_menuconfig() {
 
 [[ $# -ge 1 ]] || usage
 case "$1" in
-    list|info|enable|disable|register|build|build-all|clean|clean-all|menuconfig) cmd_${1} "${@:2}" ;;
+    list|info|enable|disable|register|build|build-all|clean|clean-all|menuconfig) "cmd_${1//-/_}" "${@:2}" ;;
     install) shift; [[ $# -ge 1 ]] && { local idir="${BUILD_BASE}/$1/install"; [[ -d "$idir" ]] && cp -af "$idir"/* "$ROOTFS_DIR"/; } || cmd_install_all ;;
     install-all) cmd_install_all "${2:-}" ;;
     *) usage ;;

@@ -2,13 +2,4 @@ RV1106 Package Configuration
 Uncomment lines below to enable packages.
 Then run: ./pkg/pkg.sh build-all && ./pkg/pkg.sh install-all
 
-PKG_ENABLE_dropbear=y
-PKG_ENABLE_openssl=y
-PKG_ENABLE_zlib=y
-PKG_ENABLE_mtd-utils=y
-PKG_ENABLE_alsa-lib=y
-PKG_ENABLE_alsa-utils=y
-PKG_ENABLE_lzo=y
-PKG_ENABLE_i2c-tools=y
-PKG_ENABLE_strace=y
-PKG_ENABLE_coreutils=y
+PKG_ENABLE_hello-world=y

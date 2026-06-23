@@ -6,60 +6,82 @@
 
 ```
 pkg/
-├── pkg.sh              # Punto de entrada / CLI del sistema de paquetes
-├── package-config      # Selección de paquetes mediante menuconfig
+├── pkg.sh              # Punto de entrada / CLI
+├── package-config      # Selección de paquetes (texto plano)
 └── available/
-    └── <nombre>/
-        └── package.mk  # Metadatos del paquete y reglas de compilación
+    └── <name>/
+        └── package.mk  # Metadatos y reglas de construcción
 ```
 
-## Referencia de API
+## Uso
 
-| Comando         | Descripción                                              |
-|-----------------|----------------------------------------------------------|
-| `list`          | Lista todos los paquetes disponibles y habilitados       |
-| `info`          | Muestra información detallada de un paquete              |
-| `enable`        | Marca un paquete como habilitado en la configuración     |
-| `disable`       | Marca un paquete como deshabilitado en la configuración  |
-| `register`      | Registra un paquete en el sistema de compilación         |
-| `build`         | Compila un paquete (descarga, extrae, compila)           |
-| `build-all`     | Compila todos los paquetes habilitados                   |
-| `install`       | Instala un paquete en el directorio de staging           |
-| `install-all`   | Instala todos los paquetes compilados en staging         |
-| `clean`         | Limpia los artefactos de compilación de un paquete       |
-| `clean-all`     | Limpia los artefactos de compilación de todos            |
-| `menuconfig`    | Selección interactiva de paquetes mediante ncurses       |
-
-## Formato `package.mk`
-
-```make
-PKG_NAME        := ejemplo
-PKG_VERSION     := 1.0.0
-PKG_SOURCE      := https://ejemplo.com/ejemplo-1.0.0.tar.gz
-PKG_LICENSE     := GPL-2.0
-PKG_DEPENDS     := zlib openssl
-PKG_DESCRIPTION := Descripción del paquete ejemplo
-
-define pkg_build
-    $(MAKE) -C $(PKG_BUILD_DIR) all
-endef
-
-define pkg_install
-    $(MAKE) -C $(PKG_BUILD_DIR) DESTDIR=$(PKG_INSTALL_DIR) install
-endef
+```bash
+cd pkg
+bash pkg.sh list               # lista paquetes (✓=habilitado ○=deshabilitado)
+bash pkg.sh enable <name>      # habilita un paquete
+bash pkg.sh disable <name>     # deshabilita un paquete
+bash pkg.sh build-all          # construye todos los habilitados
+bash pkg.sh install-all        # copia paquetes construidos al rootfs
 ```
 
-## Paquetes Semilla
+## Ejemplo de `package.mk` (`hello-world`)
 
-- dropbear — servidor y cliente SSH ligero
-- openssl — conjunto de herramientas de criptografía y SSL/TLS
-- zlib — biblioteca de compresión
-- mtd-utils — utilidades para dispositivos de memoria
-- alsa-lib / alsa-utils — biblioteca y utilidades de sonido ALSA
-- lzo — biblioteca de compresión en tiempo real
-- i2c-tools — herramientas de inspección y manipulación del bus I2C
-- strace — trazador de llamadas al sistema
-- coreutils — utilidades básicas GNU de archivos, shell y texto
+```bash
+# Metadatos
+PKG_NAME="hello-world"
+PKG_VERSION="1.0"
+PKG_LICENSE="MIT"
+PKG_DEPENDS=""
+PKG_DESCRIPTION="Paquete ejemplo: imprime Hello, RV1106!"
+
+# Construcción: copia fuente de src/hello-world/ y compila
+pkg_build() {
+    cp -a "${BASE_DIR}"/src/hello-world/* "${PKG_BUILD_DIR}/"
+    make -C "${PKG_BUILD_DIR}" \
+        CC="${CROSS_COMPILE}gcc" \
+        CFLAGS="-Os -Wall" \
+        LDFLAGS="-static"
+}
+
+# Instalación: make install en PKG_INSTALL_DIR
+pkg_install() {
+    make -C "${PKG_BUILD_DIR}" \
+        DESTDIR="${PKG_INSTALL_DIR}" \
+        install
+}
+```
+
+## Cómo Funciona
+
+1. `build-one` ejecuta `source package.mk` y llama `pkg_build` (compila)
+2. Luego llama `pkg_install` (copia artefactos a `PKG_INSTALL_DIR`)
+3. `install-all` copia `PKG_INSTALL_DIR/*` → `${ROOTFS_DIR}/`
+4. `03-build-rootfs.sh` crea la imagen ext4 desde `${ROOTFS_DIR}`
+
+Variables disponibles en `package.mk`:
+- `BASE_DIR` — raíz del SDK
+- `CROSS_COMPILE` — prefijo del toolchain
+- `PKG_BUILD_DIR` — directorio temporal de compilación
+- `PKG_INSTALL_DIR` — directorio temporal de instalación
+- `ROOTFS_DIR` — directorio de staging del rootfs
+
+## Cómo Escribir un Paquete Nuevo
+
+```
+src/<name>/       # código fuente (Makefile + fuentes)
+  ├── Makefile
+  └── main.c
+
+pkg/available/<name>/package.mk   # descriptor del paquete
+```
+
+Habilitar y construir:
+
+```bash
+bash pkg.sh enable <name>
+bash pkg.sh build <name>
+bash pkg.sh install <name>
+```
 
 ---
 
