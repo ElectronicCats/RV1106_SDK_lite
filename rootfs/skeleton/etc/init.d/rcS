@@ -1,0 +1,13 @@
+#!/bin/sh
+
+# Mount filesystems
+/bin/mount -t proc proc /proc
+/bin/mount -t sysfs sysfs /sys
+/bin/mount -t tmpfs tmpfs /tmp
+/bin/mount -t tmpfs tmpfs /var
+
+# Start mdev (dynamic device manager)
+/sbin/mdev -s
+
+# Set hostname
+/bin/hostname -F /etc/hostname

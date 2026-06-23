@@ -1,0 +1,9 @@
+output/
+src/
+*.swp
+*.swo
+*~
+.DS_Store
+.vscode/
+.idea/
+docs/.lang
