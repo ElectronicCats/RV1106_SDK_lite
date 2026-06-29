@@ -1,10 +1,11 @@
 output/
-# Ignore everything under src/ EXCEPT the SX1262 driver + CLI sources, which
-# are part of this repo. (src/* lets us re-include specific subdirs; a plain
-# "src/" would make re-inclusion impossible.)
+# Ignore everything under src/ EXCEPT our own driver/CLI sources, which are part
+# of this repo. (src/* lets us re-include specific subdirs; a plain "src/" would
+# make re-inclusion impossible.)
 src/*
 !src/sx1262-kmod
 !src/sx1262-cli
+!src/icm42670-kmod
 *.swp
 *.swo
 *~
