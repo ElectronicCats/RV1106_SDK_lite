@@ -14,3 +14,6 @@
 
 # Load SX1262 kernel module
 /sbin/insmod /lib/modules/5.10.160/sx1262.ko
+
+# Load ICM-42670-P IMU kernel module
+/sbin/insmod /lib/modules/5.10.160/icm42670.ko

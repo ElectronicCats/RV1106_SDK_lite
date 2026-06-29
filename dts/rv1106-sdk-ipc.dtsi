@@ -327,6 +327,32 @@
 		compatible = "bosch,bme280";
 		reg = <0x76>;
 	};
+
+	/*
+	 * ICM-42670-P 6-axis IMU, same I2C0 bus (AP_SCKL=GPIO1_A3,
+	 * AP_SDI=GPIO1_A4). AP_AD0=GPIO0_A5 is forced low by a gpio-hog
+	 * (see &gpio0 below) so the address is 0x68. INT1=GPIO0_A1 is wired
+	 * as the data-ready interrupt; INT2=GPIO0_A0 and FSYNC=GPIO0_A2 are
+	 * routed for future use.
+	 */
+	icm42670: icm42670@68 {
+		compatible = "invensense,icm42670p";
+		reg = <0x68>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&icm42670_pins>;
+		interrupt-parent = <&gpio0>;
+		interrupts = <RK_PA1 IRQ_TYPE_LEVEL_HIGH>;
+	};
+};
+
+/* Force ICM-42670-P AP_AD0 (GPIO0_A5) low -> I2C address 0x68. */
+&gpio0 {
+	icm42670_ad0_hog: icm42670-ad0-hog {
+		gpio-hog;
+		gpios = <RK_PA5 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "icm42670-ad0";
+	};
 };
 
 &i2c1 {
@@ -424,6 +450,17 @@
 				<1 RK_PD1 RK_FUNC_GPIO &pcfg_pull_none>,
 				<1 RK_PC5 RK_FUNC_GPIO &pcfg_pull_none>,
 				<1 RK_PD0 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
+	icm42670 {
+		/* INT1, INT2, FSYNC and AP_AD0 as GPIO (i2c SCL/SDA via i2c0m0). */
+		icm42670_pins: icm42670-pins {
+			rockchip,pins =
+				<0 RK_PA1 RK_FUNC_GPIO &pcfg_pull_none>,
+				<0 RK_PA0 RK_FUNC_GPIO &pcfg_pull_none>,
+				<0 RK_PA2 RK_FUNC_GPIO &pcfg_pull_none>,
+				<0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 };
