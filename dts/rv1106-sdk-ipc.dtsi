@@ -57,19 +57,6 @@
 		};	
 	};
 
-	// DHT11
-	dht11_sensor {
-		compatible = "dht11";
-		pinctrl-names = "default";
-		pinctrl-0 = <&gpio1_pc7>;
-
-		dht11@1 {
-			gpios = <&gpio1 RK_PC7 GPIO_ACTIVE_HIGH>;
-			label = "dht11";
-			linux,default-trigger = "humidity";
-		};
-	};
-
 };
 
 /***************************** AUDIO ********************************/
@@ -268,24 +255,59 @@
 	pinctrl-0 = <&spi0m0_clk &spi0m0_miso &spi0m0_mosi &spi0m0_cs0>;
 	#address-cells = <1>;
 	#size-cells = <0>;
-	spidev@0 {
-	compatible = "rockchip,spidev";
-		spi-max-frequency = <50000000>;
+	status = "okay";
+	sx1262@0 {
+		compatible = "semtech,sx1262";
 		reg = <0>;
-	};
-
-	fbtft@0 {
-		compatible = "sitronix,st7789v";
-		reg = <0>;
-		spi-max-frequency = <20000000>;
-		fps = <30>;
-		buswidth = <8>;
-		debug = <0x7>;
-		led-gpios = <&gpio2 RK_PB0 GPIO_ACTIVE_HIGH>;//BL
-		dc-gpios = <&gpio2 RK_PB1 GPIO_ACTIVE_HIGH>;//DC
-		reset-gpios = <&gpio1 RK_PC3 GPIO_ACTIVE_LOW>;//RES
+		spi-max-frequency = <8000000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&sx1262_dev0_pins>;
+		reset-gpios = <&gpio3 RK_PA6 GPIO_ACTIVE_LOW>;
+		busy-gpios = <&gpio3 RK_PA7 GPIO_ACTIVE_HIGH>;
+		dio1-gpios = <&gpio3 RK_PA3 GPIO_ACTIVE_HIGH>;
+		ant-sw0-gpios = <&gpio0 RK_PA3 GPIO_ACTIVE_HIGH>;
+		ant-sw1-gpios = <&gpio0 RK_PA4 GPIO_ACTIVE_HIGH>;
 	};
 };
+
+&spi1 {
+	pinctrl-0 = <&spi1m0_pins &spi1m0_cs0>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+	sx1262@0 {
+		compatible = "semtech,sx1262";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&sx1262_dev1_pins>;
+		reset-gpios = <&gpio1 RK_PC6 GPIO_ACTIVE_LOW>;
+		busy-gpios = <&gpio1 RK_PC7 GPIO_ACTIVE_HIGH>;
+		dio1-gpios = <&gpio1 RK_PD1 GPIO_ACTIVE_HIGH>;
+		ant-sw0-gpios = <&gpio1 RK_PC5 GPIO_ACTIVE_HIGH>;
+		ant-sw1-gpios = <&gpio1 RK_PD0 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+/*
+ * Peripherals whose (board-routed) pins are reused by the two SX1262 radios.
+ * Their pinctrl-0 mux groups (set above) drive pins the radios occupy:
+ *   uart3(m1) PD1/PD0, uart4(m1) PC5, uart5(m0) PA7/PA6,
+ *   pwm2/4/5/6(m2) PC0/PC1/PC2/PC3 (SPI0), pwm3(m2) PD0,
+ *   pwm9(m1) PC5, pwm10(m1) PC6/PD1, pwm11(m1) PC7.
+ */
+&uart3 { status = "disabled"; };
+&uart4 { status = "disabled"; };
+&uart5 { status = "disabled"; };
+&pwm2  { status = "disabled"; };
+&pwm3  { status = "disabled"; };
+&pwm4  { status = "disabled"; };
+&pwm5  { status = "disabled"; };
+&pwm6  { status = "disabled"; };
+&pwm9  { status = "disabled"; };
+&pwm10 { status = "disabled"; };
+&pwm11 { status = "disabled"; };
+
 // I2C
 &i2c0 {
 	pinctrl-0 = <&i2c0m2_xfer>;
@@ -370,11 +392,23 @@
 		};
 	};
 
-	gpio1-pc7 {
-		gpio1_pc7: gpio1-pc7 {
-			rockchip,pins = <1 RK_PC7 RK_FUNC_GPIO &pcfg_pull_none>;
+	sx1262 {
+		sx1262_dev0_pins: sx1262-dev0-pins {
+			rockchip,pins =
+				<3 RK_PA6 RK_FUNC_GPIO &pcfg_pull_up>,
+				<3 RK_PA7 RK_FUNC_GPIO &pcfg_pull_up>,
+				<3 RK_PA3 RK_FUNC_GPIO &pcfg_pull_none>,
+				<0 RK_PA3 RK_FUNC_GPIO &pcfg_pull_none>,
+				<0 RK_PA4 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+		sx1262_dev1_pins: sx1262-dev1-pins {
+			rockchip,pins =
+				<1 RK_PC6 RK_FUNC_GPIO &pcfg_pull_up>,
+				<1 RK_PC7 RK_FUNC_GPIO &pcfg_pull_up>,
+				<1 RK_PD1 RK_FUNC_GPIO &pcfg_pull_none>,
+				<1 RK_PC5 RK_FUNC_GPIO &pcfg_pull_none>,
+				<1 RK_PD0 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 };
-
 

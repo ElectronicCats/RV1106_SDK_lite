@@ -82,16 +82,8 @@
 	dr_mode = "peripheral";
 };
 
-/**********SPI**********/
-&spi0 {
-	status = "disabled";
-	spidev@0 {
-		spi-max-frequency = <50000000>;
-	};
-	fbtft@0 {
-		spi-max-frequency = <50000000>;
-	};
-};
+/* SX1262 radios (spi0/spi1 enable + conflicting-peripheral disables) live in
+ * rv1106-sdk-ipc.dtsi, next to the sx1262@0 nodes. */
 
 /**********I2C**********/
 /* I2C3_M1 */
@@ -107,16 +99,6 @@
 };
 
 
-/**********UART**********/
-/* UART3_M1 */
-&uart3 {
-	status = "disabled";
-};
-
-/* UART4_M1 */
-&uart4 {
-	status = "disabled";
-};
 
 /**********RTC**********/
 &rtc {
