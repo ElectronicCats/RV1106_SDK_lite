@@ -11,3 +11,6 @@
 
 # Set hostname
 /bin/hostname -F /etc/hostname
+
+# Load SX1262 kernel module
+/sbin/insmod /lib/modules/5.10.160/sx1262.ko
