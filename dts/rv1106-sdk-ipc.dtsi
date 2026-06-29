@@ -76,8 +76,10 @@
 };
 
 /***************************** ADC ********************************/
+/* SARADC (SoC successive-approximation ADC) unused — disabled so it does not
+ * register an IIO device (otherwise it takes iio:device0 before the BME280). */
 &saradc {
-	status = "okay";
+	status = "disabled";
 	vref-supply = <&vcc_1v8>;
 };
 
@@ -309,8 +311,22 @@
 &pwm11 { status = "disabled"; };
 
 // I2C
+/*
+ * BME280 (temp/pressure/humidity) on I2C0, mux m0:
+ *   SCK -> i2c0_scl_m0 = GPIO1_A3
+ *   SDI -> i2c0_sda_m0 = GPIO1_A4
+ * I2C address 0x76 (SDO tied low). Use 0x77 if SDO is tied high.
+ */
 &i2c0 {
-	pinctrl-0 = <&i2c0m2_xfer>;
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c0m0_xfer>;
+	clock-frequency = <400000>;
+
+	bme280: bme280@76 {
+		compatible = "bosch,bme280";
+		reg = <0x76>;
+	};
 };
 
 &i2c1 {
