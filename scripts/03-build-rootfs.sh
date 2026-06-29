@@ -106,6 +106,16 @@ prepare_rootfs() {
     log "Copying skeleton..."
     cp -a "${SKELETON_DIR}"/* "${ROOTFS_DIR}/"
 
+    # Create base FHS mount points / runtime dirs.
+    # These are kernel/tmpfs mount points (mounted by rcS+fstab) and must exist
+    # in the image. Git cannot track empty directories, so create them here
+    # instead of relying on empty dirs in the skeleton.
+    log "Creating base directories (mount points)..."
+    mkdir -p "${ROOTFS_DIR}"/{dev,proc,sys,run,mnt,opt,home}
+    install -d -m 1777 "${ROOTFS_DIR}/tmp"
+    install -d -m 1777 "${ROOTFS_DIR}/var"
+    install -d -m 0700 "${ROOTFS_DIR}/root"
+
     # Copy busybox _install
     log "Copying Busybox _install..."
     cp -a "${OUTPUT_DIR}/busybox-1.27.2/_install"/* "${ROOTFS_DIR}/"
