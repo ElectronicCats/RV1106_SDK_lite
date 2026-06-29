@@ -3,3 +3,4 @@ Uncomment lines below to enable packages.
 Then run: ./pkg/pkg.sh build-all && ./pkg/pkg.sh install-all
 
 PKG_ENABLE_hello-world=y
+PKG_ENABLE_sx1262=y

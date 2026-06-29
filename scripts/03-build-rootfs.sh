@@ -191,7 +191,21 @@ create_image() {
 }
 
 # ------------------------------------------------------------------
-# 5. Install packages
+# 5. Install kernel modules from staging
+# ------------------------------------------------------------------
+install_modules() {
+    local modules_staging="${OUTPUT_DIR}/modules"
+    if [ -d "${modules_staging}" ]; then
+        log "Installing kernel modules from staging..."
+        cp -a "${modules_staging}/"* "${ROOTFS_DIR}/"
+        log "Kernel modules installed."
+    else
+        log "No modules staging found at ${modules_staging}, skipping."
+    fi
+}
+
+# ------------------------------------------------------------------
+# 6. Install packages
 # ------------------------------------------------------------------
 install_packages() {
     if [ -f "${PKG_SCRIPT}" ]; then
@@ -211,6 +225,7 @@ main() {
     build_busybox
     prepare_rootfs
     strip_rootfs
+    install_modules
     install_packages
     create_image
 
