@@ -1,8 +1,17 @@
+/* Portable command layer: compiles unchanged in the Linux kmod AND in the
+ * RT-Thread MCU firmware (CubeSat migration, docs/riscv-migration/40 §4).
+ * All OS services (SPI, GPIO, delays, logging) come from the HAL functions
+ * declared below, implemented per-OS in sx1262_hal.c (Linux) or
+ * sx1262_port_rtt.c (RT-Thread). */
+#ifdef __KERNEL__
 #include <linux/spi/spi.h>
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/math64.h>
 #include "sx1262.h"
+#else
+#include "sx1262_port.h"
+#endif
 #include "sx1262_regs.h"
 
 extern int sx1262_spi_write(struct sx1262_device *dev, const uint8_t *data, size_t len);
@@ -753,7 +762,13 @@ int sx1262_init(struct sx1262_device *dev, uint32_t freq_hz)
     return 0;
 }
 
-/* Get packet status (RSSI, SNR, etc.) */
+/* Get packet status (RSSI, SNR) for the last LoRa packet.
+ * GetPacketStatus (0x14) response bytes, in order: Status, RssiPkt, SnrPkt,
+ * SignalRssiPkt. In this port's write_then_read the opcode is a separate phase,
+ * so the read phase yields rx[0]=Status, rx[1]=RssiPkt, rx[2]=SnrPkt,
+ * rx[3]=SignalRssiPkt (proven: get_rx_buffer_status reads PayloadLength at
+ * rx[1] and returns the exact payload length). Read RSSI/SNR from rx[1]/rx[2] —
+ * NOT rx[2]/rx[3], which would report SnrPkt as RSSI. */
 int sx1262_get_packet_status(struct sx1262_device *dev, int16_t *rssi_pkt, int8_t *snr)
 {
     uint8_t tx[1] = { SX1262_CMD_GET_PKT_STATUS };
@@ -762,7 +777,7 @@ int sx1262_get_packet_status(struct sx1262_device *dev, int16_t *rssi_pkt, int8_
     if (ret) return ret;
     ret = sx1262_spi_write_then_read(dev, tx, 1, rx, 4);
     if (ret) return ret;
-    *rssi_pkt = -(int16_t)(rx[2] / 2);
-    *snr = (int8_t)rx[3] / 4;
+    *rssi_pkt = -(int16_t)(rx[1] / 2);   /* RssiPkt: -RssiPkt/2 dBm */
+    *snr = (int8_t)rx[2] / 4;            /* SnrPkt:  signed, /4 dB   */
     return 0;
 }
