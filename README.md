@@ -1,8 +1,16 @@
-# RV1106 SDK
+# RV1106 SDK — CubeSat flight-computer firmware
 
-SDK mínimo para Rockchip RV1106 (Cortex-A7). Basado en Luckfox Pico SDK V1.4.
+SDK para Rockchip RV1106, computadora de vuelo CubeSat. Arranque **dual**:
+Cortex-A7 (Linux, misión) + coprocesador RISC-V SCR1 "HPMCU" (RT-Thread, control
+de hardware determinista). El MCU posee las radios **SX1262 ×2 (SPI)** y los
+sensores **BME280 + ICM-42670 (I²C0)** y los expone a Linux por rpmsg
+(`radio_test` / `sensor_test`). Basado en Luckfox Pico SDK V1.4.
 
 Board: RV1106 SDK (SPI NAND, 256 MB)
+
+> **Clon-y-compila:** el repo es autocontenido — ambos toolchains (ARM y
+> RISC-V) y todo el código fuente (kernel, U-Boot, rkbin, RT-Thread BSP) están
+> versionados. Tras clonar, `./build.sh` produce `update.img` sin descargas.
 
 ## Componentes
 
@@ -10,8 +18,10 @@ Board: RV1106 SDK (SPI NAND, 256 MB)
 |------------|---------|
 | Kernel | Linux 5.10.160 |
 | U-Boot | 2017.09 + rkbin |
+| MCU firmware | RT-Thread (Syntacore SCR1, rv32imc) — `rtthread.bin` |
 | Busybox | 1.27.2 |
-| Toolchain | GCC 8.3, uClibc, ARMv7-a hard-float |
+| Toolchain ARM | GCC 8.3, uClibc, ARMv7-a hard-float (vendored) |
+| Toolchain RISC-V | xpack riscv-none-embed-gcc 10.2.0 (vendored) |
 | Rootfs | ext4 (también soporta squashfs, ubifs, initramfs) |
 
 ## Requisitos
@@ -19,7 +29,8 @@ Board: RV1106 SDK (SPI NAND, 256 MB)
 ```bash
 sudo apt-get install -y git make gcc gcc-multilib g++ g++-multilib \
     gawk texinfo libssl-dev bison flex fakeroot cmake unzip gperf \
-    autoconf device-tree-compiler libncurses5-dev pkg-config bc python3 cpio rsync
+    autoconf device-tree-compiler libncurses5-dev pkg-config bc python3 cpio rsync \
+    scons                      # scons: requerido para el firmware del MCU (RT-Thread)
 ```
 
 ## Uso
@@ -38,8 +49,9 @@ source scripts/00-setup-toolchain.sh
 ./build.sh help
 
 # Componentes individuales
-./build.sh uboot     # Solo U-Boot
+./build.sh uboot     # Solo U-Boot (embebe rtthread.bin del MCU)
 ./build.sh kernel    # Solo kernel
+./build.sh mcu       # Solo firmware RISC-V del MCU (rtthread.bin)
 ./build.sh rootfs    # Solo rootfs + paquetes
 ./build.sh pack      # Solo empaquetar update.img
 ./build.sh flash     # Flashear al dispositivo (sudo)
@@ -78,6 +90,9 @@ Tras `./build.sh` en `output/images/`:
 
 En `docs/`: `toolchain.md`, `uboot.md`, `kernel.md`, `rootfs.md`, `packaging.md`, `pkg-system.md`
 - Bilingüe EN/ES: `./docs/switch.sh` para cambiar idioma, `./docs/switch.sh en|es` para fijar idioma
+- **Migración RISC-V / firmware del MCU** (arranque dual, RadioService, SensorService,
+  configuración registro a registro): `docs/riscv-migration/` — empezar por `00-indice.md`
+  y `90-mcu-configuracion-y-replicacion.md`.
 
 ## Licencia
 
