@@ -91,8 +91,8 @@ Tras `./build.sh` en `output/images/`:
 En `docs/`: `toolchain.md`, `uboot.md`, `kernel.md`, `rootfs.md`, `packaging.md`, `pkg-system.md`
 - Bilingüe EN/ES: `./docs/switch.sh` para cambiar idioma, `./docs/switch.sh en|es` para fijar idioma
 - **Migración RISC-V / firmware del MCU** (arranque dual, RadioService, SensorService,
-  configuración registro a registro): `docs/riscv-migration/` — empezar por `00-indice.md`
-  y `90-mcu-configuracion-y-replicacion.md`.
+  configuración registro a registro): `docs/riscv-migration/` (bilingüe EN/ES) — empezar
+  por `README.md` y `implementation/90-mcu-config-replication.md`.
 
 ## Licencia
 

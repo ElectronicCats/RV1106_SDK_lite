@@ -31,11 +31,13 @@ case "$TARGET" in
     *) echo "Usage: $0 [en|es]"; exit 1 ;;
 esac
 
-# Update symlinks for each doc
+# Update symlinks for each doc (recursively — also handles subfolders such as
+# docs/riscv-migration/{reference,design,implementation}/).
 COUNT=0
-for EN in "${DOCS}"/*.en.md; do
+while IFS= read -r EN; do
+    DIR="$(dirname "$EN")"
     BASE="$(basename "$EN" .en.md)"
-    LINK="${DOCS}/${BASE}.md"
+    LINK="${DIR}/${BASE}.md"
 
     # Check if symlink already points to target
     if [ -L "$LINK" ] && [ "$(readlink "$LINK")" = "${BASE}.${TARGET}.md" ]; then
@@ -45,10 +47,10 @@ for EN in "${DOCS}"/*.en.md; do
     # Remove existing symlink or file (but NOT the .en/.es source files)
     rm -f "$LINK"
 
-    # Create symlink to target language
+    # Create symlink to target language (relative, within the doc's folder)
     ln -s "${BASE}.${TARGET}.md" "$LINK"
     COUNT=$((COUNT + 1))
-done
+done < <(find "${DOCS}" -type f -name '*.en.md' | sort)
 
 echo "$TARGET" > "$LANG_FILE"
 echo "[docs] Switched to $TARGET ($COUNT docs updated)"
