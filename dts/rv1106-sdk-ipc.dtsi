@@ -257,7 +257,9 @@
 	pinctrl-0 = <&spi0m0_clk &spi0m0_miso &spi0m0_mosi &spi0m0_cs0>;
 	#address-cells = <1>;
 	#size-cells = <0>;
-	status = "okay";
+	/* CubeSat migración: SPI0 + SX1262 los posee ahora el MCU (RadioService
+	 * por rpmsg, applications/radio_service.c). Linux no toca este bus. */
+	status = "disabled";
 	sx1262@0 {
 		compatible = "semtech,sx1262";
 		reg = <0>;
@@ -276,7 +278,8 @@
 	pinctrl-0 = <&spi1m0_pins &spi1m0_cs0>;
 	#address-cells = <1>;
 	#size-cells = <0>;
-	status = "okay";
+	/* CubeSat migración: SPI1 cedido al MCU (radio 1, paso posterior). */
+	status = "disabled";
 	sx1262@0 {
 		compatible = "semtech,sx1262";
 		reg = <0>;
@@ -312,13 +315,17 @@
 
 // I2C
 /*
- * BME280 (temp/pressure/humidity) on I2C0, mux m0:
- *   SCK -> i2c0_scl_m0 = GPIO1_A3
- *   SDI -> i2c0_sda_m0 = GPIO1_A4
- * I2C address 0x76 (SDO tied low). Use 0x77 if SDO is tied high.
+ * I2C0 is CEDED TO THE RISC-V MCU (SensorService — docs/riscv-migration/90).
+ * The MCU owns BME280 (@0x76) and ICM-42670 (@0x68) over I2C0 and exposes them
+ * to Linux via rpmsg ("rpmsg-sensor", /dev/rpmsg1, client sensor_test), exactly
+ * as the SX1262 radios were ceded on SPI0/SPI1. Disabling the Linux controller
+ * frees the i2c0m0 pins (SCL=GPIO1_A3, SDA=GPIO1_A4) and the bus for the MCU;
+ * the in-tree bmp280 and the icm42670.ko no longer probe (expected).
+ * The child nodes are kept below only as wiring documentation (parent disabled).
+ * The &gpio0 AD0 hog is retained so ICM-42670 stays at address 0x68.
  */
 &i2c0 {
-	status = "okay";
+	status = "disabled";
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c0m0_xfer>;
 	clock-frequency = <400000>;
@@ -465,3 +472,75 @@
 	};
 };
 
+
+/*
+ * ----------------------------------------------------------------------------
+ * CubeSat Paso 0 — A7 <-> RISC-V (HPMCU) RPMsg transport.
+ * Mirrors rk3562-amp.dtsi (arm32 single-cell). The vring "reg" base and the
+ * reserved-memory base MUST match the MCU firmware linker symbol
+ * __linux_share_rpmsg_start__ (= 0x0ff00000) and rockchip,link-id must match
+ * RL_PLATFORM_SET_LINK_ID(0,4)=0x04 used by the firmware.
+ * See docs/riscv-migration/60-paso0-ipc-bringup.md.
+ * ----------------------------------------------------------------------------
+ */
+&mailbox {
+	status = "okay";
+};
+
+/ {
+	rpmsg: rpmsg@ff00000 {
+		compatible = "rockchip,rv1106-rpmsg";
+		mbox-names = "rpmsg-rx", "rpmsg-tx";
+		mboxes = <&mailbox 0 &mailbox 3>;
+		rockchip,vdev-nums = <1>;
+		rockchip,link-id = <0x04>;
+		reg = <0x0ff00000 0x20000>;
+		memory-region = <&rpmsg_dma_reserved>;
+		status = "okay";
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		/* RISC-V MCU firmware (rtthread.bin) EXECUTES from 0x40000 (bootrom Hpmcu
+		 * LOAD_ADDR=0x40000). This region (0x40000..0x7c000, matching the MCU
+		 * link.lds ORIGIN/LENGTH) MUST be carved out of Linux RAM, or the kernel
+		 * overwrites the MCU's code/stack ~400ms into boot and the SCR1 crashes
+		 * (stack pointer trashed). Mirrors Luckfox rv1106-thunder-boot.dtsi
+		 * rtos@40000 + ramoops@7c000.
+		 *
+		 * Deliberately NO no-map here (Luckfox style): a plain reservation
+		 * keeps Linux from touching it. With no-map they punch a NOMAP
+		 * hole at 0x40000, the first usable block then ends at 0x40000
+		 * (not PMD/2MB aligned), adjust_lowmem_bounds() computes
+		 * memblock_limit=0x40000, rounds it down to 0, and the no-HIGHMEM
+		 * "Ignoring RAM" branch memblock_remove()s ALL of DRAM ->
+		 * early_alloc panic in paging_init. */
+		rtos: rtos@40000 {
+			reg = <0x40000 0x3c000>;
+		};
+
+		ramoops@7c000 {
+			reg = <0x7c000 0x3000>;
+		};
+
+		/* Legacy trampoline DDR-copy region (no longer used; kept reserved). */
+		mcu_reserved: mcu@fe00000 {
+			reg = <0x0fe00000 0x100000>;
+			no-map;
+		};
+
+		rpmsg_reserved: rpmsg@ff00000 {
+			reg = <0x0ff00000 0x80000>;
+			no-map;
+		};
+
+		rpmsg_dma_reserved: rpmsg-dma@ff80000 {
+			compatible = "shared-dma-pool";
+			reg = <0x0ff80000 0x80000>;
+			no-map;
+		};
+	};
+};

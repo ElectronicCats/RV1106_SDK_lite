@@ -12,8 +12,25 @@
 # Set hostname
 /bin/hostname -F /etc/hostname
 
-# Load SX1262 kernel module
-/sbin/insmod /lib/modules/5.10.160/sx1262.ko
-
-# Load ICM-42670-P IMU kernel module
-/sbin/insmod /lib/modules/5.10.160/icm42670.ko
+# SX1262: the radio hardware is now owned by the RISC-V MCU (RadioService over
+# rpmsg — docs/riscv-migration/40). The old sx1262.ko is obsolete (its SPI DT
+# nodes are disabled). Bind the MCU's "rpmsg-radio" channel to rpmsg_chrdev so
+# userspace can drive the radio via /dev/rpmsg (radio_test).
+# Bind both MCU rpmsg service channels to rpmsg_chrdev so userspace can reach
+# them: RadioService (SX1262 x2, ept 0x4005=16389 -> /dev/rpmsg0, radio_test)
+# and SensorService (BME280 + ICM-42670 on I2C0, ept 0x4006=16390 ->
+# /dev/rpmsg1, sensor_test). The I2C sensors are now owned by the MCU (I2C0
+# ceded in the device tree), so the old icm42670.ko / bmp280 no longer apply.
+bind_rpmsg() {
+    ch="$1"
+    for i in 1 2 3 4 5; do
+        [ -e /sys/bus/rpmsg/devices/${ch} ] && break
+        sleep 1
+    done
+    if [ -e /sys/bus/rpmsg/devices/${ch} ]; then
+        echo rpmsg_chrdev > /sys/bus/rpmsg/devices/${ch}/driver_override
+        echo ${ch} > /sys/bus/rpmsg/drivers/rpmsg_chrdev/bind
+    fi
+}
+bind_rpmsg virtio0.rpmsg-radio.-1.16389
+bind_rpmsg virtio0.rpmsg-sensor.-1.16390
