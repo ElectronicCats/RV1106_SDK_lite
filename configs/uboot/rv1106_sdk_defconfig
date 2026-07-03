@@ -140,3 +140,7 @@ CONFIG_SPL_LZMA=y
 CONFIG_SPL_GZIP=y
 CONFIG_ERRNO_STR=y
 # CONFIG_EFI_LOADER is not set
+# CubeSat Paso 0: TB loader/trust ini (TB DDR is HPMCU-aware; carries Hpmcu idblock slot + wrap release)
+CONFIG_LOADER_INI="RV1106MINIALL_SPI_NAND_TB.ini"
+CONFIG_TRUST_INI="RV1106TOS_TB.ini"
+CONFIG_GZIP=y

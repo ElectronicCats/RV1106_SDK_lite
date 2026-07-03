@@ -153,8 +153,13 @@ textofs-$(CONFIG_ARCH_MSM8960) := 0x00208000
 textofs-$(CONFIG_ARCH_MESON) := 0x00208000
 textofs-$(CONFIG_ARCH_AXXIA) := 0x00308000
 textofs-$(CONFIG_CPU_RK3308) := 0x00058000
-ifeq ($(CONFIG_ROCKCHIP_THUNDER_BOOT),y)
+# CubeSat: RV1106 always links at TEXT_OFFSET 0x208000 (not only for thunder-boot).
+# The kernel is loaded at phys 0x208000 to keep 0x40000-0x7c000 free for the HPMCU;
+# TEXT_OFFSET must match the load offset so PHYS_OFFSET = 0 — head.S p2v patching
+# requires a 16MiB-aligned PHYS_OFFSET, so load(0x208000)-TEXT_OFFSET(0x8000)=0x200000
+# would take the "must be 16MiB aligned" bne __error path and hang before earlycon.
 textofs-$(CONFIG_CPU_RV1106) := 0x00208000
+ifeq ($(CONFIG_ROCKCHIP_THUNDER_BOOT),y)
 textofs-$(CONFIG_CPU_RV1126) := 0x00608000
 endif
 textofs-$(CONFIG_RV1106_HPMCU_FAST_WAKEUP) := 0x00208000

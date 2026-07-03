@@ -80,6 +80,13 @@ __mmap_switched:
 	mov	r8, r2
 	mov	r10, r0
 
+#ifdef CONFIG_DEBUG_LL
+	@ CubeSat boot-debug milestone: 'M' = MMU on, running at virtual addresses
+	ldr	r0, =CONFIG_DEBUG_UART_VIRT
+	mov	r1, #'M'
+	str	r1, [r0]
+#endif
+
 	adr	r4, __mmap_switched_data
 	mov	fp, #0
 

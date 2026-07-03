@@ -89,6 +89,12 @@ ENTRY(stext)
 	@ ensure svc mode and all interrupts masked
 	safe_svcmode_maskall r9
 
+#ifdef CONFIG_DEBUG_LL
+	@ CubeSat boot-debug milestone: 'S' = stext entered (MMU off, phys UART)
+	ldr	r9, =CONFIG_DEBUG_UART_PHYS
+	mov	r5, #'S'
+	str	r5, [r9]
+#endif
 	mrc	p15, 0, r9, c0, c0		@ get processor id
 	bl	__lookup_processor_type		@ r5=procinfo r9=cpuid
 	movs	r10, r5				@ invalid processor (r5=0)?
@@ -124,6 +130,13 @@ ENTRY(stext)
 	bl	__fixup_pv_table
 #endif
 	bl	__create_page_tables
+
+#ifdef CONFIG_DEBUG_LL
+	@ CubeSat boot-debug milestone: 'P' = page tables built (MMU still off)
+	ldr	r5, =CONFIG_DEBUG_UART_PHYS
+	mov	r6, #'P'
+	str	r6, [r5]
+#endif
 
 	/*
 	 * The following calls CPU specific code in a position independent

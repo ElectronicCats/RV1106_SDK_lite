@@ -13,8 +13,18 @@
 	model = "RV1106 SDK Board";
 	compatible = "rockchip,rv1103g-38x38-ipc-v10", "rockchip,rv1106g3";
 
+	/* Explicit memory node, Luckfox thunder-boot style (theirs lives in
+	 * rv1106-thunder-boot.dtsi). Without it the kernel depends entirely on
+	 * the U-Boot memory fixup; if that doesn't land, memblock comes up
+	 * empty and paging_init panics on the first early_alloc. U-Boot still
+	 * fixes up the real size at boot. */
+	memory {
+		device_type = "memory";
+		reg = <0x00000000 0x10000000>;
+	};
+
 	chosen {
-		bootargs = "console=ttyFIQ0";
+		bootargs = "earlyprintk earlycon=uart8250,mmio32,0xff4c0000 console=ttyFIQ0 clk_ignore_unused";
 	};
 };
 

@@ -26,9 +26,9 @@
             type = "kernel";
             arch = "";
             os = "linux";
-            compression = "";
-            entry = <0xffffff01>;
-            load = <0xffffff01>;
+            compression = "gzip";
+            entry = <0x00208000>;
+            load = <0x00208000>;
 
             hash {
                 algo = "sha256";

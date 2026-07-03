@@ -11,6 +11,7 @@
 #include <linux/mman.h>
 #include <linux/nodemask.h>
 #include <linux/memblock.h>
+#include <linux/initrd.h>
 #include <linux/fs.h>
 #include <linux/vmalloc.h>
 #include <linux/sizes.h>
@@ -709,9 +710,32 @@ static void __init *early_alloc(unsigned long sz)
 {
 	void *ptr = memblock_alloc(sz, sz);
 
-	if (!ptr)
-		panic("%s: Failed to allocate %lu bytes align=0x%lx\n",
-		      __func__, sz, sz);
+	if (!ptr) {
+		/* CubeSat boot-debug: fold the memblock state into the panic
+		 * message itself — at this point in paging_init the printk
+		 * console isn't up and the DEBUG_LL static map may be gone,
+		 * but the panic string is known to reach the UART. */
+		static char dump[920];
+		char *p = dump;
+		int i;
+
+		p += sprintf(p, "early_alloc(%lu) lim=%llx initrd=%llx+%llx\n",
+			     sz, (u64)memblock.current_limit,
+			     (u64)phys_initrd_start, (u64)phys_initrd_size);
+		for (i = 0; i < memblock.memory.cnt && i < 6; i++)
+			p += sprintf(p, "M%d %llx+%llx f%lx\n", i,
+				     (u64)memblock.memory.regions[i].base,
+				     (u64)memblock.memory.regions[i].size,
+				     (unsigned long)memblock.memory.regions[i].flags);
+		for (i = 0; i < memblock.reserved.cnt && i < 14; i++)
+			p += sprintf(p, "R%d %llx+%llx\n", i,
+				     (u64)memblock.reserved.regions[i].base,
+				     (u64)memblock.reserved.regions[i].size);
+		p += sprintf(p, "Mcnt=%lu Rcnt=%lu",
+			     (unsigned long)memblock.memory.cnt,
+			     (unsigned long)memblock.reserved.cnt);
+		panic("%s", dump);
+	}
 
 	return ptr;
 }

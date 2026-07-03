@@ -436,6 +436,15 @@ void board_set_iomux(enum if_type if_type, int devnum, int routing)
 
 int arch_cpu_init(void)
 {
+	/* CubeSat: our HP_MCU uses a custom-trampoline boot whose (prebuilt) SPL
+	 * skips rk_meta_process(), leaving CORE_GRF MCU_CACHE_MISC (0xff04002c) = 0
+	 * (measured). That mis-configures the SCR1 cache and crashes the MCU ~400 ms
+	 * after boot (stack pointer trashed to the DDR region). Program it to the
+	 * standard 0x00080008 as early as possible. arch_cpu_init() runs in
+	 * board_init_f, early in U-Boot proper (the SPL is a prebuilt rkbin binary we
+	 * cannot modify), well within the MCU's ~400 ms pre-crash window. */
+	writel(0x00080008, CORE_GRF_BASE + CORE_GRF_MCU_CACHE_MISC);
+
 #if defined(CONFIG_SPL_BUILD) || defined(CONFIG_SUPPORT_USBPLUG)
 	/* Save chip version to OS_REG1[2:0] */
 	if (readl(ROM_VER_REG) == ROM_V2)
@@ -551,6 +560,14 @@ int spl_fit_standalone_release(char *id, uintptr_t entry_point)
 		/* set the mcu uncache area, usually set the devices address */
 		writel(0xff000, CORE_GRF_BASE + CORE_GRF_CACHE_PERI_ADDR_START);
 		writel(0xffc00, CORE_GRF_BASE + CORE_GRF_CACHE_PERI_ADDR_END);
+		/* CubeSat: HP_MCU cache "misc" config, normally written by
+		 * rk_meta_process() during the SPL meta load. Our custom-trampoline
+		 * boot path does NOT run rk_meta_process(), so this GRF register was
+		 * left at 0 (verified 0xff04002c == 0), which corrupts the SCR1 a few
+		 * hundred ms after boot (stack pointer trashed to the DDR region).
+		 * Set it here, while the MCU is held in reset, to match the standard
+		 * boot (0x00080008). */
+		writel(0x00080008, CORE_GRF_BASE + CORE_GRF_MCU_CACHE_MISC);
 		/* Reset the hp mcu */
 		writel(0x1e001e, CORECRU_BASE + CORECRU_CORESOFTRST_CON01);
 		/* set the mcu addr */

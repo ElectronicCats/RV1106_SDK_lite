@@ -214,7 +214,14 @@ make_fit_boot_img()
 
 	cp -a ${BOOT_ITS} ${ITS}
 	cp -a ${DTB_PATH} ${OUT}/fdt
-	cp -a ${KERNEL_ZIMAGE_PATH} ${OUT}/kernel
+	# CubeSat: boot the gzip-compressed raw Image, NOT the zImage.
+	# A zImage self-decompresses to a fixed AUTO_ZRELADDR, which may not match
+	# the FIT 'load' address; the raw Image is decompressed by U-Boot to the FIT
+	# 'load' address (0x208000, = TEXT_OFFSET so PHYS_OFFSET stays 0), leaving
+	# 0x40000 for the HPMCU. Gzip the Image here instead of using the Image.gz
+	# make target: with -j the zImage and Image.gz sub-makes race on rebuilding
+	# arch/arm/boot/Image and Image.gz can come out empty/truncated.
+	gzip -n -9 -c ${KERNEL_IMAGE_PATH} > ${OUT}/kernel
 	cp -a resource.img ${OUT}/resource
 
 	if [ "${ARCH}" == "arm64" ]; then
