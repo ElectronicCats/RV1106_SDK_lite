@@ -7,6 +7,10 @@ command -v "${CROSS_COMPILE}gcc" &>/dev/null || err "Toolchain not configured. R
 log "=== RV1106 SDK Full Build ==="
 log "[clean] Removing output/"; rm -rf "$OUTPUT_DIR"; prepare_dirs
 log "[toolchain] ${CROSS_COMPILE}"
+# MCU firmware first: it is staged into rkbin so the U-Boot loader step embeds
+# it as the Hpmcu loader (RV1106MINIALL.ini). Non-fatal if the RISC-V toolchain
+# is absent — the loader then keeps any existing Hpmcu blob.
+log "[00] Building MCU firmware (RISC-V)..."; bash scripts/06-build-mcu.sh || warn "MCU build skipped/failed; continuing without updated Hpmcu"
 log "[01] Building U-Boot...";  BOOT_MEDIUM="${RK_BOOT_MEDIUM:-}" bash scripts/01-build-uboot.sh
 log "[02] Building Kernel..."; bash scripts/02-build-kernel.sh
 # Packages (incl. the sx1262 kernel module, built by the sx1262 package)

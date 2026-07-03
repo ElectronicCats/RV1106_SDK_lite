@@ -6,6 +6,11 @@ src/*
 !src/sx1262-kmod
 !src/sx1262-cli
 !src/icm42670-kmod
+!src/radio-client
+!src/sensor-client
+# RISC-V MCU (RT-Thread) BSP source — needed to build rtthread.bin from a clean
+# clone. Build artifacts are re-excluded below.
+!src/mcu
 *.swp
 *.swo
 *~
@@ -13,3 +18,17 @@ src/*
 .vscode/
 .idea/
 docs/.lang
+# RISC-V MCU (RT-Thread) build artifacts — never commit these
+src/mcu/**/build/
+src/mcu/**/rtthread.elf
+src/mcu/**/rtthread.bin
+src/mcu/**/rtthread.map
+src/mcu/**/.config
+src/mcu/**/rtconfig.h
+src/mcu/**/*.o
+src/mcu/**/*.i
+src/mcu/**/*.s
+# Shared SX1262 core is synced into applications/ by scripts/06-build-mcu.sh from
+# src/sx1262-kmod (the single source of truth); don't commit the copies.
+src/mcu/**/applications/sx1262_cmd.c
+src/mcu/**/applications/sx1262_regs.h

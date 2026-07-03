@@ -290,7 +290,7 @@ EOF
     echo -e "package-file\tpackage-file" >> "$PACKAGE_FILE"
     echo -e "bootloader\tdownload.bin" >> "$PACKAGE_FILE"
     echo -e "env\tenv.img" >> "$PACKAGE_FILE"
-    for entry in idblock.img uboot.img trust.img boot.img rootfs.img userdata.img; do
+    for entry in idblock.img uboot.img meta.img trust.img boot.img rootfs.img userdata.img; do
         if [ -f "$OUTPUT_DIR/$entry" ]; then
             local part_name="${entry%.img}"
             echo -e "${part_name}\t${entry}" >> "$PACKAGE_FILE"

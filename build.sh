@@ -17,6 +17,7 @@ case "${1:-}" in
         echo "  uboot          Build U-Boot + rkbin (idblock, uboot, trust)"
         echo "  kernel         Build kernel + DTB + FIT boot image"
         echo "  rootfs         Build busybox + staging rootfs"
+        echo "  mcu            Build RISC-V coprocessor firmware (RT-Thread, rtthread.bin)"
         echo "  pack           Package update.img from built components"
         echo "  flash          Flash update.img via upgrade_tool (needs sudo)"
         echo "  menuconfig     Enable/disable packages (openssl, dropbear, etc)"
@@ -31,6 +32,7 @@ case "${1:-}" in
     uboot)       BOOT_MEDIUM="${RK_BOOT_MEDIUM:-}" bash scripts/01-build-uboot.sh "${2:-}" ;;
     kernel)      bash scripts/02-build-kernel.sh "${2:-}" ;;
     rootfs)      bash scripts/03-build-rootfs.sh ;;
+    mcu)         bash scripts/06-build-mcu.sh "${2:-}" ;;
     pack)        bash scripts/04-pack-image.sh ;;
     flash)       bash scripts/05-flash.sh ;;
     menuconfig)  bash pkg/pkg.sh menuconfig ;;
