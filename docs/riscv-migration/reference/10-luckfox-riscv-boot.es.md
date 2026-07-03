@@ -1,8 +1,8 @@
 # Referencia Luckfox — Soporte RISC-V (HPMCU / RT-Thread)
 
-> **Naturaleza del documento.** Estudio del **SDK Luckfox** (`/home/heikki/Documents/luckfox-pico`)
+> **Naturaleza del documento.** Estudio del **SDK Luckfox Pico** (referencia externa)
 > como referencia técnica. Todas las rutas son relativas a ese SDK. No describe
-> este repo CubeSat. Cubre las Fases 2 y 4 del plan.
+> este repo CubeSat. Referencia técnica del SoC.
 
 El RV1106 integra un Cortex-A7 (Linux) y un coprocesador **RISC-V** que Rockchip
 denomina **HPMCU** ("High-Performance MCU"). El HPMCU ejecuta **RT-Thread**. En el
@@ -168,4 +168,4 @@ Registros: `CORE_SGRF_HPMCU_BOOT_ADDR=0x0044` sobre `CORE_SGRF_BASE=0xff076000`;
 **Pendiente de confirmar (riesgos):** (a) qué *board variant* mínima usar como punto
 de partida; (b) que el flujo rkbin del CubeSat acepte el `LOADER2=Hpmcu` (hoy el
 CubeSat no empaqueta firmware de MCU); (c) presupuesto real de RAM tras enlazar
-RT-Thread + un driver. Estos puntos se resuelven en la Fase 10 (doc 50).
+RT-Thread + un driver. Estos puntos se resuelven en la implementación (doc 50).

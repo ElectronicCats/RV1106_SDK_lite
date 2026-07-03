@@ -1,8 +1,8 @@
 # Referencia Luckfox — IPC ARM (A7) ↔ RISC-V (HPMCU)
 
-> **Naturaleza del documento.** Estudio del **SDK Luckfox** como referencia técnica
-> (Fase 8 del plan). Rutas relativas al SDK. Cumple la *instrucción obligatoria*
-> del plan: localizar y documentar la comunicación A7↔RISC-V real, citando archivos.
+> **Naturaleza del documento.** Estudio del **SDK Luckfox Pico** (referencia externa) como
+> referencia técnica. Rutas relativas al SDK. Localiza y documenta la comunicación
+> A7↔RISC-V real, citando archivos.
 
 ## 0. Resumen y estado para el RV1106
 
@@ -162,5 +162,5 @@ recompilar:
 5. **Dirección física de vrings:** definirla coherentemente en ambos lados (DT
    reserved-memory ↔ porting del MCU).
 
-Estos cinco puntos son el contenido de la **Fase 10, paso 0** del roadmap (doc 50):
+Estos cinco puntos son el contenido de **el bring-up del transporte IPC** (doc 50):
 "levantar el transporte IPC" antes de migrar cualquier driver.

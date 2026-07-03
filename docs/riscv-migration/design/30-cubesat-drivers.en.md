@@ -1,10 +1,10 @@
 # Existing CubeSat drivers — inventory for migration
 
 > **Nature of the document.** Study of **this CubeSat repo**
-> (`/home/heikki/Documents/pwncube-sdk`). Paths relative to this repo. Covers
-> Phases 1 and 5 of the plan: catalog the functional Linux drivers and separate the
+> (this repository). Paths relative to this repo. Catalog the functional Linux
+> drivers and separate the
 > **portable hardware logic** from the Linux-specific *glue*, the basis of the
-> migration (Phase 6). No code is modified.
+> migration. No code is modified.
 
 Existing and complementary user documentation: `docs/sx1262.md`,
 `docs/bme280.md`, `docs/icm42670.md`. Device tree: `dts/rv1106g-sdk.dts` (includes

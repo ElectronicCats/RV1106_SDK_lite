@@ -1,10 +1,10 @@
-# Diseño de la migración (Fases 6 y 7)
+# Diseño de la migración
 
-> **Naturaleza del documento.** Diseño, **previo a implementar** (regla del plan).
+> **Naturaleza del documento.** Diseño, **previo a implementar**.
 > Se basa en los docs 10/20/30. Decide, por driver, qué se reutiliza y qué se
 > adapta, y fija la arquitectura objetivo Linux↔RISC-V.
 
-## 1. Arquitectura objetivo (Fase 7)
+## 1. Arquitectura objetivo
 
 ```
  ┌──────────────────────── Linux / Cortex-A7 ────────────────────────┐
@@ -29,13 +29,13 @@
                             Hardware (SX1262 ×2, BME280, ICM-42670)
 ```
 
-**Reparto de responsabilidades (regla del plan):**
+**Reparto de responsabilidades:**
 - **Linux:** lógica de misión, CCSDS, almacenamiento, planificación, eventos.
   **Nunca** accede directamente al hardware tras la migración.
 - **RT-Thread:** control determinista de hardware (radio, SPI, I²C, GPIO, sensores).
   **No** implementa lógica de misión.
 
-**Principio de portado (regla del plan: reutilizar el máximo):** por cada driver se
+**Principio de portado (por diseño: reutilizar el máximo):** por cada driver se
 conserva la **lógica de hardware portable** del doc 30 (idealmente en archivos
 `*_cmd.c`/`*_regs.h` casi intactos) y se sustituye **solo** la capa de acceso (SPI/
 I²C/GPIO/IRQ) y la interfaz al exterior (char dev/IIO → IPC). Patrón: una *Interfaz
@@ -43,7 +43,7 @@ de Portabilidad* fina (HAL del driver) que en Linux mapea a `spi_sync`/`regmap`/
 `gpiod_*` y en RT-Thread a `HAL_SPI`/`drv_i2c`/`HAL_GPIO`. Así el mismo `*_cmd.c`
 compila en ambos lados.
 
-## 2. Paso 0 — Transporte IPC (prerrequisito de todo)
+## 2. Transporte IPC (prerrequisito de todo)
 
 Antes del primer driver hay que **cablear** RPMsg para el RV1106 (doc 20 §8):
 
@@ -57,10 +57,10 @@ Antes del primer driver hay que **cablear** RPMsg para el RV1106 (doc 20 §8):
 5. Integrar en `build.sh` del CubeSat: target `mcu` (toolchain RISC-V + SCons) y
    empaquetar `rtthread.bin` como `LOADER2=Hpmcu` en el flujo rkbin.
 
-**Criterio de aceptación del Paso 0:** desde Linux, enviar un mensaje por
+**Criterio de aceptación del transporte IPC:** desde Linux, enviar un mensaje por
 `/dev/rpmsg*` y recibir el eco del RISC-V. Sin esto, no se migra ningún driver.
 
-## 3. Diseño por driver (Fase 6)
+## 3. Diseño por driver
 
 ### 3.1 SPI (infraestructura, antes del SX1262)
 
@@ -104,7 +104,7 @@ Antes del primer driver hay que **cablear** RPMsg para el RV1106 (doc 20 §8):
 
 ## 4. Estrategia de portabilidad de código (cómo reutilizar al máximo)
 
-Se propone, **sin reorganizar el proyecto** (regla del plan), añadir junto a cada
+Se propone, **sin reorganizar el proyecto**, añadir junto a cada
 driver una capa de portabilidad fina, p.ej.:
 
 ```
@@ -133,13 +133,13 @@ debe tener un único dueño**, fijado por configuración:
 ## 6. Decisiones abiertas para el usuario (antes de implementar)
 
 1. **Propiedad de SPI/I²C:** ¿se cede SPI0/SPI1 e I²C0 por completo al RISC-V (Linux
-   deja de tener acceso directo, como pide el plan)? Implica editar el DT del CubeSat.
-2. **Alcance del Paso 0:** ¿implementar primero solo el transporte IPC (PING/ECHO) y
+   deja de tener acceso directo, por diseño)? Implica editar el DT del CubeSat.
+2. **Alcance inicial:** ¿implementar primero solo el transporte IPC (PING/ECHO) y
    validarlo en hardware antes de migrar el SX1262?
 3. **Estrategia RPMsg:** ¿reutilizar el porting RK3568 asumiendo compatibilidad, o
    crear `platform/RV1106/` desde cero (más seguro, más trabajo)?
 4. **Coexistencia:** ¿mantener los drivers Linux operativos en paralelo durante la
    migración (capa de portabilidad §4) o migrar "de golpe"?
 
-El roadmap de implementación (Fases 10–12) y el protocolo IPC concreto están en el
+El roadmap de implementación y el protocolo IPC concreto están en el
 doc 50.

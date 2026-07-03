@@ -1,4 +1,4 @@
-# Paso 0-bis — Test de loopback por mailbox crudo (sin rpmsg)
+# Test de loopback por mailbox crudo (sin rpmsg)
 
 Diagnóstico de transporte A7 ↔ MCU basado en el **patrón probado por Rockchip**
 (mailbox crudo + memoria compartida, **sin vrings**), documentado en

@@ -1,13 +1,13 @@
-# Step 0 — IPC transport bring-up (status and recipe)
+# IPC transport bring-up (status and recipe)
 
-> Implementation status of **Phase 10, Step 0** (RPMsg transport A7↔RISC-V).
+> Implementation status of the **RPMsg transport A7↔RISC-V**.
 > Distinguishes what is **verified (compiles)** from what remains for the **on-board session**.
 > Decisions taken: cede the buses to the RISC-V; our own `platform/RV1106/` porting;
-> MCU without console (verification via IPC); advance Step 0 in software.
+> MCU without console (verification via IPC); advance the bring-up in software.
 
 ## 1. Done and verified (compiles)
 
-**MCU firmware base** (Phase 10 base):
+**MCU firmware base**:
 - Vendored RT-Thread tree in `src/mcu/`; toolchain `toolchain/riscv/` (`riscv-none-embed-gcc 10.2.0`).
 - Minimal board `src/mcu/.../rv1106-mcu/board/pwncube/` (no camera/ISP; **no uart2** — Linux owns the console `ttyFIQ0`).
 - `scripts/06-build-mcu.sh` + `./build.sh mcu` → `output/mcu/rtthread.bin` (~20 KB).

@@ -1,13 +1,13 @@
-# Paso 0 — Bring-up del transporte IPC (estado y receta)
+# Bring-up del transporte IPC (estado y receta)
 
-> Estado de implementación de la **Fase 10, Paso 0** (transporte RPMsg A7↔RISC-V).
+> Estado de implementación del **transporte RPMsg A7↔RISC-V**.
 > Distingue lo **verificado (compila)** de lo que queda para la **sesión en placa**.
 > Decisiones tomadas: ceder buses al RISC-V; porting `platform/RV1106/` propio;
-> MCU sin consola (verificación por IPC); avanzar Paso 0 en software.
+> MCU sin consola (verificación por IPC); avanzar el bring-up en software.
 
 ## 1. Hecho y verificado (compila)
 
-**Base de firmware MCU** (Fase 10 base):
+**Base de firmware MCU**:
 - Árbol RT-Thread vendorizado en `src/mcu/`; toolchain `toolchain/riscv/` (`riscv-none-embed-gcc 10.2.0`).
 - Board mínima `src/mcu/.../rv1106-mcu/board/pwncube/` (sin cámara/ISP; **sin uart2** — Linux posee la consola `ttyFIQ0`).
 - `scripts/06-build-mcu.sh` + `./build.sh mcu` → `output/mcu/rtthread.bin` (~20 KB).

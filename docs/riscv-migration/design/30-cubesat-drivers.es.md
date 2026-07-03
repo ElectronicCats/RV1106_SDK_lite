@@ -1,10 +1,10 @@
 # Drivers CubeSat existentes — inventario para migración
 
 > **Naturaleza del documento.** Estudio de **este repo CubeSat**
-> (`/home/heikki/Documents/pwncube-sdk`). Rutas relativas a este repo. Cubre las
-> Fases 1 y 5 del plan: catalogar los drivers Linux funcionales y separar la
+> (este repositorio). Rutas relativas a este repo. Catalogar los drivers Linux
+> funcionales y separar la
 > **lógica de hardware portable** del *glue* específico de Linux, base de la
-> migración (Fase 6). No se modifica código.
+> migración. No se modifica código.
 
 Documentación de usuario existente y complementaria: `docs/sx1262.md`,
 `docs/bme280.md`, `docs/icm42670.md`. Device tree: `dts/rv1106g-sdk.dts` (incluye

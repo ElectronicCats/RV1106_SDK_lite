@@ -6,21 +6,20 @@
 
 Design **and implementation** of migrating the CubeSat flight-computer drivers
 from Linux (Cortex-A7) to the **Syntacore SCR1** RISC-V coprocessor ("HPMCU",
-RT-Thread), over rpmsg IPC. Covers Phases 1–12 of the *Master Plan*
-(`Plan_Firmware_CubeSat_Luckfox_Referencia.md`): study of the project and of the
-Luckfox SDK as a reference, the per-driver migration design, and the on-board
-verified implementation.
+RT-Thread), over rpmsg IPC. Covers the study of the project and of the Luckfox
+SDK as a reference, the per-driver migration design, and the on-board verified
+implementation.
 
 **Status (2026-07-03):** dual boot A7+MCU **WORKING**; **RadioService**
 (SX1262 ×2 over SPI) and **SensorService** (BME280 + ICM-42670 over I²C0)
 **validated on hardware**. Both services coexist on the same poll thread.
 
-## Project separation (plan rule)
+## Project separation
 
 | Project | Location | Role |
 |---------|----------|------|
-| **CubeSat (this repo)** | `/home/heikki/Documents/pwncube-sdk` | Flight-computer firmware. This is what is developed. |
-| **Luckfox SDK** | `/home/heikki/Documents/luckfox-pico` | **Technical reference only** for the RV1106. Never modified. |
+| **CubeSat** | this repository | Flight-computer firmware. This is what is developed. |
+| **Luckfox SDK** | external reference (outside this repo) | **Technical reference only** for the RV1106. Never modified. |
 
 Citations `sysdrv/...`, `project/...` → **Luckfox SDK**. Citations `src/...`,
 `dts/...`, `pkg/...` → **this CubeSat repo**.

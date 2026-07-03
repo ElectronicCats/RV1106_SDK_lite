@@ -56,7 +56,7 @@ RT-Thread = deterministic hardware control, **never** mission logic.
    (`src/u-boot/arch/arm/mach-rockchip/rv1106/rv1106.c`) only the id `"mcu0"`
    runs the full sequence; `"mcu1"` only sets the address and the SCR1
    stays in reset FOREVER. The mcu0 sequence (verifiable with devmem):
-   | Step | Register | Value | Verification from Linux |
+   | # | Register | Value | Verification from Linux |
    |---|---|---|---|
    | Non-cacheable window | `0xff040024/28` (CORE_GRF) | `0xff000`/`0xffc00` | — |
    | Cache misc | `0xff04002c` | `0x00080008` | reads `0x8` |

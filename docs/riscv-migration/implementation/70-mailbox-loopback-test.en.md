@@ -1,4 +1,4 @@
-# Step 0-bis — Raw mailbox loopback test (without rpmsg)
+# Raw mailbox loopback test (without rpmsg)
 
 A7 ↔ MCU transport diagnostic based on the **pattern proven by Rockchip**
 (raw mailbox + shared memory, **without vrings**), documented in

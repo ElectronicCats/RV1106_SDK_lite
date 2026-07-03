@@ -1,10 +1,10 @@
-# Protocolo IPC, Servicios, CCSDS y Roadmap (Fases 9–12)
+# Protocolo IPC, Servicios, CCSDS y Roadmap
 
 > **Naturaleza del documento.** Diseño previo a implementación. El protocolo se
 > apoya en el transporte real de Luckfox (doc 20) y en el patrón `rpmsg_cmd`
 > (tabla cmd→handler). Versión propuesta: **v1**.
 
-## 1. Protocolo IPC (Fase 9)
+## 1. Protocolo IPC
 
 ### 1.1 Principios
 - **Versionado:** cada mensaje lleva `version` (empezar en 1). Cambios incompatibles
@@ -75,11 +75,11 @@ La CLI `sx1262_cli` y los lectores IIO actuales se reescriben como **clientes IP
 `/dev/sx1262-*` traduciendo ioctl→IPC, para no romper scripts de misión durante la
 transición.
 
-## 2. Roadmap de implementación (Fase 10)
+## 2. Roadmap de implementación
 
-Orden del plan: **SPI → SX1262 → BME280 → ICM-42670**, precedido del transporte IPC.
+Orden de implementación: **SPI → SX1262 → BME280 → ICM-42670**, precedido del transporte IPC.
 
-| Paso | Entregable | Aceptación |
+| # | Entregable | Aceptación |
 |------|-----------|------------|
 | **0. Transporte IPC** | rpmsg cableado RV1106 (kernel match + DT + porting + dispatcher PING) + target `mcu` en `build.sh` | Eco A7↔RISC-V por `/dev/rpmsg*` en hardware. |
 | **1. SPI** | `RT_USING_SPI` + `drv_spi` configurado; SPI0/SPI1 reasignados al MCU | Loopback / lectura de ID del SX1262 desde el MCU. |
@@ -92,15 +92,15 @@ Cada paso: diseño confirmado → implementación → prueba en hardware (flujo 
 acceso por serie 115200 / build / insmod ya documentado en la memoria del proyecto)
 → documentación EN/ES.
 
-## 3. Servicios (Fase 11)
+## 3. Servicios
 Implementados como hilos RT-Thread en el RISC-V, cada uno con su tabla de comandos
 (patrón `rpmsg_cmd`, doc 20 §1.3): **RadioService**, **SensorService**,
 **ConfigurationService**, **EventService**. Linux expone clientes equivalentes.
 
-## 4. CCSDS (Fase 12) — incremental, en Linux
+## 4. CCSDS — incremental, en Linux
 Implementación inicial del **Space Packet** (lado Linux, software de misión):
 Primary Header (APID, Sequence Count/Flags, Packet Length), Payload. El RISC-V
-**no** maneja CCSDS (regla del plan: la lógica de misión vive en Linux). El
+**no** maneja CCSDS (por diseño: la lógica de misión vive en Linux). El
 RadioService transporta los bytes ya empaquetados.
 
 ```
@@ -111,7 +111,7 @@ CCSDS Space Packet Primary Header (6 bytes):
 ```
 
 ## 5. Resumen de cambios que requerirán aprobación (cambios arquitectónicos)
-Según la *instrucción obligatoria* del plan, estos pasos son cambios arquitectónicos
+Estos pasos son cambios arquitectónicos
 y **no** se ejecutan sin visto bueno:
 - Editar el **device tree del CubeSat** para ceder SPI0/SPI1/I²C0 al RISC-V y añadir
   el nodo rpmsg + reserved-memory.
@@ -120,6 +120,4 @@ y **no** se ejecutan sin visto bueno:
 - Modificar el **kernel** (tabla de match rpmsg) y el flujo **rkbin** (`LOADER2=Hpmcu`).
 - Reescribir las interfaces de usuario (CLI/IIO) como **clientes IPC**.
 
-> **Estado actual:** documentación y diseño completos (Fases 1–9). La implementación
-> (Fases 10–12) está a la espera de decisión sobre las "Decisiones abiertas" del
-> doc 40 §6.
+> **Estado actual:** diseño completo; el transporte IPC y los servicios de Radio/Sensor están implementados y validados en placa (ver los docs de implementation/).
