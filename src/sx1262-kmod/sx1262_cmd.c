@@ -72,7 +72,7 @@ int sx1262_write_register(struct sx1262_device *dev, uint16_t addr, uint8_t val)
 int sx1262_read_registers(struct sx1262_device *dev, uint16_t addr, uint8_t *buf, size_t len)
 {
     uint8_t tx[3] = { SX1262_CMD_READ_REGISTER, (addr >> 8) & 0xFF, addr & 0xFF };
-    uint8_t nop_len = len + 1; /* status byte + data */
+    size_t nop_len = len + 1; /* status byte + data (size_t: no u8 wrap at len=255) */
     uint8_t rx[260];
     int ret;
 
@@ -230,7 +230,12 @@ int sx1262_set_frequency(struct sx1262_device *dev, uint32_t freq_hz)
     if (ret) return ret;
     ret = sx1262_spi_write(dev, tx, 5);
     if (ret) return ret;
-    return sx1262_wait_busy(dev, 100);
+    ret = sx1262_wait_busy(dev, 100);
+    if (ret) return ret;
+    /* Image calibration is centred on the carrier (datasheet §9.2.1) and must be
+     * redone when the frequency moves bands. Doing it on every SetRfFrequency
+     * keeps runtime retunes correct, not just the init path. */
+    return sx1262_calibrate_image_for_freq(dev, freq_hz);
 }
 
 /* Set buffer base addresses for FIFO (TX and RX) */
@@ -288,6 +293,52 @@ int sx1262_set_tx_params(struct sx1262_device *dev, int8_t power_dbm, uint8_t ra
     return sx1262_wait_busy(dev, 100);
 }
 
+/* Program output power: pick paDutyCycle/hpMax/paVal from the per-dBm table
+ * (identical to the fixed 0x04/0x07 config at +22 dBm, cleaner below), issue
+ * SetPaConfig + SetTxParams, then set OCP to 140 mA (reg 0x08E7 = 0x38) — the
+ * SX1262 datasheet value (Table 5-2). SetPaConfig reloads OCP
+ * to the 140 mA default anyway, so the write MUST come last and MUST be 0x38:
+ * clamping OCP lower (e.g. 60 mA) starves the high-power PA at +22 dBm, which
+ * clips mid-burst and splatters across ~1-2 MHz (worse as power rises). */
+int sx1262_set_output_power(struct sx1262_device *dev, int8_t power)
+{
+    /* PA optimal-settings table (datasheet 13.1.14.1), index power+9, power in [-9, 22]. {paDutyCycle, hpMax, paVal}. */
+    static const struct { uint8_t duty; uint8_t hp; int8_t val; } pa_opt[32] = {
+        {2,2,-5},{2,1,0},{1,1,3},{1,2,0},{1,1,6},{1,2,3},{2,2,2},{4,1,6},
+        {1,1,11},{2,1,11},{1,1,14},{2,1,14},{1,1,20},{1,1,22},{2,2,11},{3,1,21},
+        {1,2,17},{4,2,13},{1,2,20},{1,2,22},{2,2,21},{3,2,21},{1,4,19},{1,4,20},
+        {3,3,20},{2,5,19},{1,6,22},{2,5,22},{3,5,22},{3,6,22},{4,6,22},{4,7,22},
+    };
+    uint8_t pa[5];
+    int idx, ret;
+
+    if (power > 22)  power = 22;
+    if (power < -9)  power = -9;
+    idx = power + 9;
+
+    /* SetPaConfig: paDutyCycle, hpMax, deviceSel=0x00 (SX1262), paLut=0x01 */
+    pa[0] = SX1262_CMD_SET_PA_CONFIG;
+    pa[1] = pa_opt[idx].duty;
+    pa[2] = pa_opt[idx].hp;
+    pa[3] = 0x00;
+    pa[4] = 0x01;
+    ret = sx1262_wait_busy(dev, 100);
+    if (ret) return ret;
+    ret = sx1262_spi_write(dev, pa, 5);
+    if (ret) return ret;
+    ret = sx1262_wait_busy(dev, 100);
+    if (ret) return ret;
+
+    /* SetTxParams: paVal from table, ramp 200us (0x04) */
+    ret = sx1262_set_tx_params(dev, pa_opt[idx].val, 0x04);
+    if (ret) return ret;
+
+    /* OCP = 140 mA (0x38), SX1262 datasheet value (Table 5-2). Must
+     * follow SetPaConfig (which reloads it) and must NOT be lower or the PA
+     * clips at high power. */
+    return sx1262_write_register(dev, 0x08E7, 0x38);
+}
+
 /* Set modulation parameters (LoRa) */
 int sx1262_set_modulation_params(struct sx1262_device *dev, uint8_t sf, uint32_t bw, uint8_t cr, bool ldro)
 {
@@ -308,6 +359,16 @@ int sx1262_set_modulation_params(struct sx1262_device *dev, uint8_t sf, uint32_t
         case 250000:   bw_bits = 0x05; break;
         case 500000:   bw_bits = 0x06; break;
         default:       bw_bits = 0x04; break;  /* 125 kHz */
+    }
+
+    /* LDRO auto: mandatory when the LoRa symbol time exceeds 16.38 ms
+     * (SF11/SF12 @125k, SF12 @250k, ...). the datasheet defines it the same
+     * way; both link ends must agree or the packet won't demodulate. The
+     * passed-in ldro is only an override for SF/BW where auto says off. */
+    {
+        uint64_t sym_us = ((uint64_t)(1ULL << sf) * 1000000ULL) / (bw ? bw : 1);
+        if (sym_us > 16380ULL)
+            ldro = true;
     }
 
     tx[1] = sf;         /* Spreading Factor */
@@ -351,14 +412,44 @@ int sx1262_set_packet_params(struct sx1262_device *dev, uint16_t preamble_len,
         hdr_type,                       /* HeaderType: 0=variable, 1=fixed */
         payload_len,                    /* PayloadLength */
         crc_type,                       /* CrcType: 0=off, 1=on */
-        iq_inverted ? 0x40 : 0x00      /* InvertIQ: bit 6 */
+        iq_inverted ? 0x01 : 0x00      /* InvertIQ (datasheet Table 13-70:
+                                        * 0x00=standard, 0x01=inverted). Was
+                                        * wrongly 0x40 (bit 6 is not InvertIQ). */
     };
 
     ret = sx1262_wait_busy(dev, 100);
     if (ret) return ret;
     ret = sx1262_spi_write(dev, tx, 7);
     if (ret) return ret;
-    return sx1262_wait_busy(dev, 100);
+    ret = sx1262_wait_busy(dev, 100);
+    if (ret) return ret;
+
+    /* Errata 15.4: Optimizing the Inverted-IQ Operation. RegIqPolaritySetup
+     * (0x0736) bit 2 must be CLEARED when IQ is inverted and SET when IQ is
+     * standard; otherwise LoRa packets with inverted IQ are frequently lost.
+     * Applied on every SetPacketParams so RX/TX polarity always tracks it. */
+    {
+        uint8_t reg = 0;
+        if (sx1262_read_register(dev, 0x0736, &reg) == 0) {
+            if (iq_inverted)
+                reg &= ~0x04;
+            else
+                reg |= 0x04;
+            sx1262_write_register(dev, 0x0736, reg);
+        }
+    }
+    return 0;
+}
+
+/* LoRa sync word (regs 0x0740 MSB / 0x0741 LSB). Reset default is 0x1424
+ * ("private network"); LoRaWAN/public networks use 0x3444 (SX127x lore calls
+ * these 0x12/0x34). Both ends of a link MUST match or packets are never
+ * detected. Like the rest of the config, it is lost on chip reset. */
+int sx1262_set_sync_word(struct sx1262_device *dev, uint16_t sync)
+{
+    int ret = sx1262_write_register(dev, 0x0740, (uint8_t)(sync >> 8));
+    if (ret) return ret;
+    return sx1262_write_register(dev, 0x0741, (uint8_t)sync);
 }
 
 /* Set DIO IRQ params via the SetDioIrqParams command (opcode 0x08).
@@ -463,10 +554,12 @@ int sx1262_get_dev_errors(struct sx1262_device *dev, uint16_t *errors)
 /* Clear device errors */
 int sx1262_clear_dev_errors(struct sx1262_device *dev)
 {
-    uint8_t tx[1] = { SX1262_CMD_CLEAR_DEV_ERRORS };
+    /* Datasheet Table 13-86: ClearDeviceErrors = opcode + 0x00 + 0x00 (3 bytes).
+     * Sending only the opcode leaves the errors uncleared (command param error). */
+    uint8_t tx[3] = { SX1262_CMD_CLEAR_DEV_ERRORS, 0x00, 0x00 };
     int ret = sx1262_wait_busy(dev, 100);
     if (ret) return ret;
-    ret = sx1262_spi_write(dev, tx, 1);
+    ret = sx1262_spi_write(dev, tx, 3);
     if (ret) return ret;
     return sx1262_wait_busy(dev, 100);
 }
@@ -512,10 +605,12 @@ int sx1262_calibrate(struct sx1262_device *dev, uint8_t calib_params)
 /* Calibrate image for given frequency band (start/end) */
 int sx1262_calibrate_image(struct sx1262_device *dev, uint8_t freq_band_start, uint8_t freq_band_end)
 {
-    uint8_t tx[4] = { SX1262_CMD_CALIBRATE_IMAGE, freq_band_start, freq_band_end, 0x00 };
+    /* Datasheet Table 13-19: CalibrateImage = opcode + freq1 + freq2 (3 bytes).
+     * The old trailing 0x00 was a spurious param byte (command param error). */
+    uint8_t tx[3] = { SX1262_CMD_CALIBRATE_IMAGE, freq_band_start, freq_band_end };
     int ret = sx1262_wait_busy(dev, 100);
     if (ret) return ret;
-    ret = sx1262_spi_write(dev, tx, 4);
+    ret = sx1262_spi_write(dev, tx, 3);
     if (ret) return ret;
     return sx1262_wait_busy(dev, 30000);
 }
@@ -597,14 +692,14 @@ int sx1262_set_tx_continuous_wave(struct sx1262_device *dev)
     return sx1262_wait_busy(dev, 100);
 }
 
-/* Set RX (timeout in ms, 0 = continuous) */
+/* Set RX (timeout in ms, 0 = continuous). Datasheet §14.3 order: clear IRQ ->
+ * SetRx -> wait BUSY. No post-arm delay/clear (that would wipe an RxDone that
+ * lands immediately) and no per-arm dev-error clear (that erases real errors). */
 int sx1262_set_rx(struct sx1262_device *dev, uint32_t timeout_ms)
 {
     int ret;
     uint32_t timeout_raw;
     uint8_t tx[4] = { SX1262_CMD_SET_RX };
-    uint8_t status;
-    uint16_t err_bits;
 
     /* ms == 0 -> continuous RX (0xFFFFFF). Otherwise timeout in 15.625us steps. */
     if (timeout_ms == 0)
@@ -616,7 +711,6 @@ int sx1262_set_rx(struct sx1262_device *dev, uint32_t timeout_ms)
     tx[2] = (timeout_raw >> 8) & 0xFF;
     tx[3] = timeout_raw & 0xFF;
 
-    /* Set ANT_SW to RX if in auto mode */
     if (dev->ant_sw_mode == SX1262_ANTSW_AUTO)
         sx1262_set_antsw(dev, SX1262_ANTSW_RX);
 
@@ -628,51 +722,25 @@ int sx1262_set_rx(struct sx1262_device *dev, uint32_t timeout_ms)
     ret = sx1262_wait_busy(dev, 100);
     if (ret) return ret;
 
-    ret = sx1262_get_status(dev, &status);
-    dev_info(&dev->spi->dev, "set_rx: pre status=0x%02x mode=%d\n", status, (status >> 4) & 0x07);
+    /* Clear IRQ BEFORE arming — clearing after SetRx would drop an immediate RxDone. */
+    sx1262_clear_irq_status(dev, SX1262_IRQ_ALL);
 
-    /* Check and clear device errors before SetRx */
-    sx1262_get_dev_errors(dev, &err_bits);
-    dev_info(&dev->spi->dev, "set_rx: dev_errors_pre=0x%04x\n", err_bits);
-    sx1262_clear_dev_errors(dev);
-
-    dev_info(&dev->spi->dev, "set_rx: cmd=%02x %02x %02x %02x\n",
-             tx[0], tx[1], tx[2], tx[3]);
     ret = sx1262_spi_write(dev, tx, 4);
     if (ret) return ret;
 
-    ret = sx1262_wait_busy(dev, 100);
-    if (ret) {
-        dev_err(&dev->spi->dev, "set_rx: BUSY timeout\n");
-        return ret;
-    }
-
-    msleep(110);
-    ret = sx1262_get_status(dev, &status);
-    dev_info(&dev->spi->dev, "set_rx: after 110ms status=0x%02x mode=%d\n", status, (status >> 4) & 0x07);
-
-    sx1262_get_dev_errors(dev, &err_bits);
-    dev_info(&dev->spi->dev, "set_rx: dev_errors_post=0x%04x\n", err_bits);
-
-    msleep(50);
-    ret = sx1262_get_status(dev, &status);
-    dev_info(&dev->spi->dev, "set_rx: after 50ms status=0x%02x mode=%d\n", status, (status >> 4) & 0x07);
-
-    sx1262_clear_irq_status(dev, 0xFFFF);
-    return 0;
+    return sx1262_wait_busy(dev, 100);
 }
 
-/* Initialize device: full startup sequence matching RadioLib conventions */
+/* Initialize device: full startup sequence per the SX1262 datasheet */
 int sx1262_init(struct sx1262_device *dev, uint32_t freq_hz)
 {
     int ret;
-    uint16_t errs;
 
     /* --- Step 1: Standby RC --- */
     ret = sx1262_set_standby(dev, SX1262_STANDBY_RC);
     if (ret) { dev_err(&dev->spi->dev, "Standby failed\n"); return ret; }
 
-    /* --- Step 1a: Regulator mode DC-DC + LDO (RadioLib default for SX1262) ---
+    /* --- Step 1a: Regulator mode DC-DC + LDO (recommended for SX1262) ---
      * NOTE: these modules use a plain 32 MHz crystal (XOSC starts cleanly with
      * dev_errors=0). DIO3-as-TCXO control makes XOSC fail (XOSC_START_ERR 0x20),
      * so it is intentionally NOT configured. */
@@ -696,36 +764,27 @@ int sx1262_init(struct sx1262_device *dev, uint32_t freq_hz)
     ret = sx1262_calibrate(dev, 0x7F);
     if (ret) { dev_err(&dev->spi->dev, "Calibrate failed\n"); return ret; }
 
-    /* --- Step 5: Calibrate image for the operating band --- */
-    ret = sx1262_calibrate_image_for_freq(dev, freq_hz);
-    if (ret) { dev_err(&dev->spi->dev, "Calibrate image failed\n"); return ret; }
-
-    /* --- Step 6: Set PA config for SX1262 (high-power PA) --- */
-    ret = sx1262_set_pa_config(dev);
-    if (ret) { dev_err(&dev->spi->dev, "PA config failed\n"); return ret; }
-
-    /* Errata 15.2: better Tx resistance to antenna mismatch.
-     * Reg 0x08D8 (TxClampConfig) |= 0x1E (set bits 1-4). */
+    /* Errata 15.2 (datasheet): better Tx resistance to antenna mismatch.
+     * Reg 0x08D8 bits 4-1 = 1111 (|= 0x1E). */
     {
-        uint8_t reg = 0, after = 0;
-        if (sx1262_read_register(dev, 0x08D8, &reg) == 0) {
-            dev_info(&dev->spi->dev, "CLAMP: read 0x08D8=0x%02x\n", reg);
+        uint8_t reg = 0;
+        if (sx1262_read_register(dev, 0x08D8, &reg) == 0)
             sx1262_write_register(dev, 0x08D8, reg | 0x1E);
-            sx1262_read_register(dev, 0x08D8, &after);
-            dev_info(&dev->spi->dev, "CLAMP: after write=0x%02x (expected 0x%02x)\n",
-                     after, reg | 0x1E);
-        }
     }
 
-    /* --- Step 7: Set frequency --- */
+    /* --- Step 7: Set frequency. sx1262_set_frequency() now runs CalibrateImage
+     * AFTER SetRfFrequency internally (image is centred on the carrier; the old
+     * calibrate-before-set-freq order left it tuned to the POR ~915 MHz and RX
+     * only worked near 915). --- */
     ret = sx1262_set_frequency(dev, freq_hz);
     if (ret) { dev_err(&dev->spi->dev, "Set frequency failed\n"); return ret; }
 
-    /* --- Step 8: Set TX params (power dBm, ramp 0x00-0x07; 0x04 = 200us) --- */
-    ret = sx1262_set_tx_params(dev, 14, 0x04);
-    if (ret) { dev_err(&dev->spi->dev, "TX params failed\n"); return ret; }
+    /* --- Step 8: Output power (SetPaConfig + SetTxParams + OCP 140 mA).
+     * default 20 dBm. --- */
+    ret = sx1262_set_output_power(dev, 20);
+    if (ret) { dev_err(&dev->spi->dev, "Output power failed\n"); return ret; }
 
-    /* --- Step 9: Set modulation params (LoRa SF7 BW125 CR4/5) --- */
+    /* --- Step 9: Modulation params. Default SF7, BW125, CR4/5; LDRO auto-computed inside set_modulation_params. --- */
     ret = sx1262_set_modulation_params(dev, 7, 125000, 1, false);
     if (ret) { dev_err(&dev->spi->dev, "Modulation params failed\n"); return ret; }
 
@@ -733,32 +792,29 @@ int sx1262_init(struct sx1262_device *dev, uint32_t freq_hz)
     ret = sx1262_set_buffer_base_address(dev, 0x00, 0x00);
     if (ret) { dev_err(&dev->spi->dev, "Buffer base addr failed\n"); return ret; }
 
-    /* --- Step 11: Set packet params (preamble=8, variable, crc on) --- */
-    ret = sx1262_set_packet_params(dev, 8, 0, 0xFF, 1, 0);
+    /* --- Step 11: Packet params. Default preamble 12, explicit header, CRC ON, IQ standard. --- */
+    ret = sx1262_set_packet_params(dev, 12, 0, 0xFF, 1, 0);
     if (ret) { dev_err(&dev->spi->dev, "Packet params failed\n"); return ret; }
 
-    /* --- Step 12: Clear IRQ status and route TxDone/RxDone/Timeout to DIO1 --- */
+    /* --- Step 11b: LoRa sync word. Default private 0x1424 (datasheet reset value);
+     * host can switch to public 0x3444. --- */
+    ret = sx1262_set_sync_word(dev, 0x1424);
+    if (ret) { dev_err(&dev->spi->dev, "Sync word failed\n"); return ret; }
+
+    /* --- Step 12: Clear IRQ and route TxDone/RxDone/Timeout/CrcErr to DIO1.
+     * CRC_ERR must be in the mask or the poll loop's CRC-ok flag is meaningless. --- */
     sx1262_clear_irq_status(dev, 0xFFFF);
-    ret = sx1262_set_dio_irq_params(dev, SX1262_IRQ_TX_DONE | SX1262_IRQ_RX_DONE | SX1262_IRQ_TIMEOUT);
+    ret = sx1262_set_dio_irq_params(dev, SX1262_IRQ_TX_DONE | SX1262_IRQ_RX_DONE |
+                                        SX1262_IRQ_TIMEOUT | SX1262_IRQ_CRC_ERR);
     if (ret) { dev_err(&dev->spi->dev, "DIO IRQ failed\n"); return ret; }
 
-    /* Verify IRQ registers were written correctly */
-    sx1262_read_register(dev, 0x01D4, (uint8_t *)&errs);
-    dev_info(&dev->spi->dev, "IRQ: 01D4=0x%02x (expect 0x00)\n", (uint8_t)(errs & 0xFF));
-    {
-        uint8_t v;
-        sx1262_read_register(dev, 0x01D5, &v);
-        dev_info(&dev->spi->dev, "IRQ: 01D5=0x%02x (expect 0x83)\n", v);
-        sx1262_read_register(dev, 0x01D7, &v);
-        dev_info(&dev->spi->dev, "IRQ: 01D7=0x%02x (expect 0x83)\n", v);
-    }
+    /* --- Step 13: Rx Boosted Gain for best sensitivity. Datasheet Table 9-3 /
+     * reg map: reg 0x08AC reset = 0x94 (power-saving); 0x96 = boosted gain. --- */
+    sx1262_write_register(dev, 0x08AC, 0x96);
 
-    /* --- Step 14: Clear any pending device errors from calibration --- */
-    sx1262_get_dev_errors(dev, &errs);
-    dev_info(&dev->spi->dev, "INIT: dev_errors=0x%04x\n", errs);
+    /* --- Step 14: Clear any device errors accumulated during calibration --- */
     sx1262_clear_dev_errors(dev);
 
-    dev_info(&dev->spi->dev, "INIT: done\n");
     return 0;
 }
 

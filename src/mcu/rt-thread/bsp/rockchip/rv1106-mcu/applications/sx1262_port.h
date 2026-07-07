@@ -145,10 +145,12 @@ int sx1262_set_buffer_base_address(struct sx1262_device *dev, uint8_t tx_base, u
 int sx1262_set_rx_tx_fallback_mode(struct sx1262_device *dev, uint8_t mode);
 int sx1262_set_pa_config(struct sx1262_device *dev);
 int sx1262_set_tx_params(struct sx1262_device *dev, int8_t power_dbm, uint8_t ramp_time);
+int sx1262_set_output_power(struct sx1262_device *dev, int8_t power);
 int sx1262_set_modulation_params(struct sx1262_device *dev, uint8_t sf, uint32_t bw, uint8_t cr, bool ldro);
 int sx1262_set_packet_params(struct sx1262_device *dev, uint16_t preamble_len,
                              uint8_t header_type, uint8_t payload_len,
                              uint8_t crc_type, uint8_t invert_iq);
+int sx1262_set_sync_word(struct sx1262_device *dev, uint16_t sync);
 int sx1262_set_dio_irq_params(struct sx1262_device *dev, uint16_t irq_mask);
 int sx1262_get_rx_buffer_status(struct sx1262_device *dev, uint8_t *payload_len, uint8_t *rx_start);
 int sx1262_clear_irq_status(struct sx1262_device *dev, uint16_t irq_mask);
