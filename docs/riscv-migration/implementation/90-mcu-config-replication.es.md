@@ -1,6 +1,6 @@
 # 90 — Configuración del MCU (RISC-V/RT-Thread): guía definitiva de replicación
 
-> **Estado: DOS SERVICIOS VALIDADOS EN PLACA (2026-07-03).**
+> **Estado: DOS SERVICIOS VALIDADOS EN PLACA.**
 > El MCU posee **las dos radios SX1262 (SPI0/SPI1)** y **los dos sensores I²C0
 > (BME280 + ICM-42670)**. RadioService: CW 915 MHz visto en analizador + loopback
 > LoRa en placa (radio0↔radio1, CRC ok) con TX/RX de paquetes, RX continuo con
@@ -211,7 +211,7 @@ que funciona es **HAL directo**, sin framework de drivers RT-Thread:
 
 ## 7bis. RadioService: protocolo IPC y plano de paquetes (VALIDADO)
 
-Estado (2026-07-02): control + paquetes funcionando en **ambas** radios (SPI0 y
+Estado: control + paquetes funcionando en **ambas** radios (SPI0 y
 SPI1). Loopback LoRa en placa verificado en las dos direcciones
 (radio0↔radio1, CRC ok, RSSI ~−24 dBm). El servicio soporta `N_RADIO=2`
 instancias (`req[1]`=instancia 0|1).
@@ -233,6 +233,11 @@ instancia inválida, 0xEE cmd desconocido):
 | **0x0D** | **TX** | `len data..` | envía 1 paquete, bloquea a TX_DONE |
 | **0x0E** | **RX_START** | `t_hi t_lo` (ms, 0=cont) | arma escucha (no bloquea) |
 | **0x0F** | **RX_STOP** | — | vuelve a standby |
+| **0x10** | **SET_MOD_PARAMS** | `sf, bw_hi, bw_lo, cr` | Modulación LoRa (SF 5-12, BW en kHz, CR 1-4) |
+| **0x11** | **SET_PKT_PARAMS** | `pre_hi, pre_lo, hdr, plen, crc, iq` | Formato de paquete (preámbulo, tipo de header, longitud, CRC, IQ invertida). **`iq` es pegajoso** (`s_iq[inst]`): una vez seteado se re-aplica en cada TX y en cada RX hasta cambiarlo o reiniciar. Ambos extremos del enlace deben usar la misma polaridad IQ. |
+| **0x12** | **GET_PKT_STATUS** | — | `rssi_hi rssi_lo snr` (RSSI/SNR del último paquete recibido) |
+| **0x13** | **GET_RSSI_INST** | — | `rssi_hi rssi_lo` (RSSI instantáneo) |
+| **0x14** | **SET_SYNC** | `sw_hi, sw_lo` | Sync word LoRa: 0x1424 privada (default de reset), 0x3444 pública/LoRaWAN. Ambos extremos deben coincidir; se pierde con el reset del chip |
 
 **Eventos no solicitados** (MCU→host, empujados desde el poll loop):
 - `EVT_RX 0xE0`: `[0xE0,inst,flags,len,rssi_hi,rssi_lo,snr,data..]`
@@ -262,7 +267,7 @@ respuesta+evento en UN fd — evita la contención de dos procesos sobre
 
 ---
 
-**Mejoras de la app SX1262 (2026-07-03, "terminar la aplicación"):**
+**Mejoras de la app SX1262:**
 - **RSSI/SNR corregidos**: `sx1262_get_packet_status` leía RSSI/SNR con un
   desfase de un byte (`rx[2]/rx[3]` = SnrPkt/SignalRssiPkt en vez de
   `rx[1]/rx[2]` = RssiPkt/SnrPkt). En `write_then_read` de este port el orden es
@@ -278,6 +283,39 @@ respuesta+evento en UN fd — evita la contención de dos procesos sobre
   `s_rx_host[inst]` (el host que armó ESA radio), no al último que mandó un
   comando. Así un TX concurrente desde otro proceso no "roba" los eventos del
   oyente. Las respuestas diferidas siguen yendo a `s_host_addr` (quien preguntó).
+
+**Polaridad IQ + fix de interop:**
+- **IQ configurable (pegajoso)**: `SET_PKT_PARAMS` (0x11) guarda `s_iq[inst]`, aplicado
+  por `radio_do_tx` y `radio_do_rx_start` — antes ambos fijaban IQ estándar a fuego, lo
+  que hacía imposible un enlace con IQ invertida. Se setea con `radio_test pkt <pre> <hdr>
+  <plen> <crc> <iq>`; vuelve a estándar en cada reinicio.
+- **Errata 15.4 (operación con IQ invertida)**: `sx1262_set_packet_params` ahora escribe
+  RegIqPolaritySetup (0x0736) en cada llamada — limpia el bit 2 para IQ invertida, lo
+  setea para estándar. Sin este workaround los paquetes LoRa con IQ invertida se pierden
+  con frecuencia.
+- **Causa raíz del RX externo fallido** (diagnosticada en hardware): el peer la referencia
+  transmite con **IQ invertida + sync público 0x3444**, mientras nuestro TX/RX estaban
+  fijos en IQ estándar. IQ es el ÚNICO parámetro que legítimamente se configura distinto
+  en TX que en RX (convención LoRaWAN / estación terrena: gateway transmite invertido y
+  escucha estándar), y por eso producía la asimetría "el peer nos recibe, nosotros nunca
+  lo recibimos" — silencio total, sin detección de preámbulo (a diferencia de un mismatch
+  de CRC/payload, que igual dispararía RX_DONE con crc=bad). Se descartaron primero
+  frecuencia (CW centrado en 915), cadena de RX (loopback en placa) y SF/BW/sync/antsw
+  (barridos por comando); IQ era el único parámetro hardcodeado que quedaba. Verificado
+  en el aire: `raw[4]=68 6f 6c 61 txt="hola" rssi=-92 crc=ok` a 915/SF7/BW125/pub/IQ-invertida.
+
+**Fix de orden de calibración de imagen + config la referencia:**
+- **Bug de calibración**: `calibrate_image_for_freq` corría ANTES de `set_frequency`, dejando
+  la imagen centrada en el default de POR (~915 MHz) → el RX solo funcionaba cerca de 915
+  (loopback en placa probó RX muerto a 916). Movido a DESPUÉS de `set_frequency` (paso 7b):
+  RX OK en 915-920 MHz y RSSI mejoró de ~-90 a ~-18 dBm. Afecta también el kmod de Linux.
+- **`sx1262_init` define los defaults**: SF7, BW125,
+  CR4/5, **preamble 12**, 20 dBm, **sync 0x1424 privada** escrito explícito, CRC off. El
+  preamble 12 también se aplica en `radio_do_tx`/`radio_do_rx_start`.
+- **Fix de reporte**: el cliente `radio_test` imprimía "BW=250 kHz" en el init por defecto
+  mientras el chip estaba en BW125. Ahora reporta la config real (por eso "no respetaba el
+  ancho de banda": era el label, no el chip). Diagnóstico clave: **el loopback mapea el RX
+  por frecuencia sin necesidad del peer**.
 
 ---
 

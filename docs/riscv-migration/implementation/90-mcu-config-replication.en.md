@@ -1,6 +1,6 @@
 # 90 — MCU Configuration (RISC-V/RT-Thread): definitive replication guide
 
-> **Status: TWO SERVICES VALIDATED ON BOARD (2026-07-03).**
+> **Status: TWO SERVICES VALIDATED ON BOARD.**
 > The MCU owns **both SX1262 radios (SPI0/SPI1)** and **both I²C0 sensors
 > (BME280 + ICM-42670)**. RadioService: CW 915 MHz seen on the analyzer + LoRa
 > loopback on board (radio0↔radio1, CRC ok) with packet TX/RX, continuous RX with
@@ -211,7 +211,7 @@ that works is **direct HAL**, with no RT-Thread driver framework:
 
 ## 7bis. RadioService: IPC protocol and packet plane (VALIDATED)
 
-Status (2026-07-02): control + packets working on **both** radios (SPI0 and
+Status: control + packets working on **both** radios (SPI0 and
 SPI1). LoRa loopback on board verified in both directions
 (radio0↔radio1, CRC ok, RSSI ~−24 dBm). The service supports `N_RADIO=2`
 instances (`req[1]`=instance 0|1).
@@ -221,18 +221,23 @@ response mirrors `cmd` with `[1]`=err — 0 ok, 0x10 not-initialized, 0xED
 invalid instance, 0xEE unknown cmd):
 
 | cmd | name | args | extra response |
-|---|---|---|---|
+|---|---|---|---|---|
 | 0x01 | PING | — | `'R','D','I','O',ver` |
 | 0x02 | RESET_STATUS | — | `status` (physical reset) |
 | 0x03/0x04 | READ/WRITE_REG | `a_hi a_lo [v]` | `val` (read) |
-| 0x05 | INIT | `f3..f0` (Hz BE) | full init, 14 dBm |
+| 0x05 | INIT | `f3..f0` (Hz BE) + optional `[sf, bw_hi, bw_lo, cr, pwr]` | Full init with the ground-station reference defaults (20 dBm, BW125, SF7, CR4/5, preamble 12, CRC on, sync 0x1424, OCP 140 mA, Rx boosted gain). Extra bytes override modulation and power. |
 | 0x06/0x07 | SET_FREQ/POWER | `f3..f0` / `dbm` | requires init |
 | 0x08/0x09 | CW / STANDBY | — | carrier on/off |
 | 0x0A/0x0B | GET_STATUS/ERRORS | — | `status` / `e_hi e_lo` |
 | 0x0C | SET_ANTSW | `mode` | 0=auto 1=tx 2=rx |
 | **0x0D** | **TX** | `len data..` | sends 1 packet, blocks until TX_DONE |
-| **0x0E** | **RX_START** | `t_hi t_lo` (ms, 0=cont) | arms listen (does not block) |
+| **0x0E** | **RX_START** | `t_hi t_lo` (ms, 0=cont) | arms listen with software deadline; re-arms after each packet for multi-packet capture within the window |
 | **0x0F** | **RX_STOP** | — | returns to standby |
+| **0x10** | **SET_MOD_PARAMS** | `sf, bw_hi, bw_lo, cr` | LoRa modulation (SF 5-12, BW in kHz, CR 1-4) |
+| **0x11** | **SET_PKT_PARAMS** | `pre_hi, pre_lo, hdr, plen, crc, iq` | Packet format. **`preamble`, `crc` and `iq` are all sticky** (`s_preamble`/`s_crc`/`s_iq[inst]`, defaults 12/on/std): once set they are reapplied by every TX and every RX arm until changed or reboot. Both link ends must share all three. |
+| **0x12** | **GET_PKT_STATUS** | — | `rssi_hi rssi_lo snr` (RSSI/SNR of last received packet) |
+| **0x13** | **GET_RSSI_INST** | — | `rssi_hi rssi_lo` (instantaneous RSSI) |
+| **0x14** | **SET_SYNC** | `sw_hi, sw_lo` | LoRa sync word: 0x1424 private (reset default), 0x3444 public/LoRaWAN. Both link ends must match; lost on chip reset |
 
 **Unsolicited events** (MCU→host, pushed from the poll loop):
 - `EVT_RX 0xE0`: `[0xE0,inst,flags,len,rssi_hi,rssi_lo,snr,data..]`
@@ -247,37 +252,123 @@ by IRQ):
   ⚠️ In LoRa the chip transmits EXACTLY `SetPacketParams.payloadLength` bytes
   → it must be set to the real size before each TX (init leaves it at 0xFF);
   restore 0xFF before RX.
-- **Event-driven RX, non-blocking**: `RX_START` arms `set_rx()`;
-  `radio_service_poll()` (every ~2 ms) checks **DIO1 via GPIO** (`sx1262_dio1_is_high`,
-  no SPI) and, only if it is high, reads IRQ; on RX_DONE it reads buffer+RSSI/SNR and
-  **pushes** `EVT_RX` to the host; on TIMEOUT it pushes `EVT_RX_TIMEOUT`. It is one-shot
-  RX (it disarms on delivery). **This is the DIO1 event push.**
-  NEVER do a blocking listen inside the handler (it would freeze the transport).
+- **Event-driven RX, non-blocking**: `RX_START` arms `set_rx()` in continuous mode
+  (chip timeout = 0xFFFFFF); `radio_service_poll()` (every ~2 ms) checks **DIO1 via GPIO**
+  (`sx1262_dio1_is_high`, no SPI) and, only if it is high, reads IRQ; on RX_DONE it
+  reads buffer+RSSI/SNR and **pushes** `EVT_RX` to the host; then **re-arms RX** with
+  remaining time if the software deadline has not expired. This allows **multi-packet
+  capture** within a single RX window. On timeout (software `s_rx_deadline` or chip
+  `TIMEOUT` IRQ) it pushes `EVT_RX_TIMEOUT`. NEVER do a blocking listen inside the
+  handler (it would freeze the transport).
 
 **Client** `radio_test` (`/usr/bin`, permanent): `-r <0|1>` selects the radio;
-`tx <texto>`, `rx [ms]`, and `loopback <freq> <texto> [txi rxi]` (full test in
-a single process: initializes both, arms RX, transmits and demultiplexes
-response+event on ONE fd — avoids the contention of two processes over
-`/dev/rpmsg0`).
+error codes display as human-readable strings (OK, ERROR, NOT_INITED). Commands:
+
+| Command | Description |
+|---------|-------------|
+| `init <freq> [key=val ...]` | Robust init: every TX param individually settable by name in any order — `sf= bw= cr= power= pre= crc=on\|off iq=std\|inv sync=pub\|priv\|<hex>`. Unspecified take flat-sat defaults. Orchestrates INIT (0x05) + SET_PKT_PARAMS (0x11 sticky pre/crc/iq) + SET_SYNC (0x14) on one endpoint, prints the full resolved config. Bare positional `init <freq> sf bw cr pwr` still works. |
+| `tx <text>` | Raw LoRa TX. Sends `<text>` bytes directly over the air (no SPP wrapper). |
+| `ccsds <apid_hex> [text]` | Builds and transmits a CCSDS SPP packet (6-byte big-endian header + payload). Prints hex header for correlation. |
+| `rx [ms]` | Receives ALL packets within the window. Output always shows **raw hex dump** plus **SPP parsing** (v, type TM/TC, APID, seq, data) when the first 3 bits indicate CCSDS version 0. |
+| `power`, `mod`, `pkt`, `pkts`, `rssi`, `reg`, `wreg`, ... | Direct register/modulation control. |
+
+**RX output examples** (raw hex + SPP auto-detect):
+```
+# raw LoRa:
+rx: radio=1 raw[4]=68 6f 6c 61  rssi=-43 snr=10 crc=ok
+# CCSDS SPP packet:
+rx: radio=1 raw[10]=10 01 c0 00 00 03 70 69 6e 67  SPP: v=0 TC apid=0x001 seq=0(0x3) pay_len=4 data="ping" rssi=-47 snr=12 crc=ok
+```
+
+`loopback <freq> <texto> [txi rxi]` (full test in a single process: initializes
+both, arms RX, transmits and demultiplexes response+event on ONE fd — avoids the
+contention of two processes over `/dev/rpmsg0`).
 
 ---
 
-**SX1262 app improvements (2026-07-03, "finishing the application"):**
-- **RSSI/SNR corrected**: `sx1262_get_packet_status` read RSSI/SNR with a
-  one-byte offset (`rx[2]/rx[3]` = SnrPkt/SignalRssiPkt instead of
-  `rx[1]/rx[2]` = RssiPkt/SnrPkt). In this port's `write_then_read` the order is
-  `rx[0]=Status, rx[1]=1st data byte` (demonstrated by `get_rx_buffer_status`, which
-  returns the exact length by reading `rx[1]`). Before it reported −24 dBm (which was
-  SNR); now −8 dBm real in close coupling. Fix in the shared core
-  `sx1262_cmd.c` → ALSO fixes the Linux kmod.
-- **Continuous RX with re-arm**: `RX_START` with `t=0` leaves the chip in continuous RX
-  (`0xFFFFFF`); the poll, after delivering `EVT_RX`, only clears the IRQ and keeps
-  listening (it does not go to standby). Verified: a background listener receives
-  successive packets without re-arming.
-- **Per-instance event routing**: `EVT_RX`/`EVT_RX_TIMEOUT` are pushed to
-  `s_rx_host[inst]` (the host that armed THAT radio), not to the last one that sent a
-  command. This way a concurrent TX from another process does not "steal" the listener's
-  events. The deferred responses keep going to `s_host_addr` (whoever asked).
+**SX1262 app improvements:**
+- **RSSI/SNR corrected**: `sx1262_get_packet_status` read RSSI/SNR with a one-byte
+  offset. Fix in the shared core `sx1262_cmd.c`.
+- **Continuous RX with software deadline**: `RX_START` with `t>0` uses a software
+  deadline (`s_rx_deadline[inst]`) in the poll loop. After each `RX_DONE` the chip is
+  re-armed with the remaining time, enabling **multi-packet capture** within a single
+  RX window. When the deadline expires, `EVT_RX_TIMEOUT` is pushed even if the chip
+  was still in continuous mode.
+- **Per-instance event routing**: as before — events go to `s_rx_host[inst]`.
+- **INIT extended (cmd 0x05)**: accepts optional `[sf, bw_khz>>8, bw_khz, cr, power_dbm]`
+  after the 4-byte frequency. If present, overrides the `sx1262_init()` defaults.
+- **on-air defaults**: `sx1262_init()` defaults: **SF7,
+  BW125, CR4/5, preamble 12, 20 dBm, sync 0x1424 (private), explicit header, CRC on, IQ
+  standard**. mission.h UPLINK/DOWNLINK BW = 125 kHz. Preamble 12 / CRC on also in
+  `radio_do_tx`/`radio_do_rx_start`. sync/IQ stay host-configurable (the peer may run at
+  public 0x3444 + inverted IQ at runtime — both ends must match).
+- **Wideband-TX ("invasive, grows with power") fix — OCP**: the splatter that widened as
+  power rose was an over-tight OCP starving the PA. A prior the datasheet port had set **OCP =
+  60 mA (0x18)**; the SX1262 high-power PA draws >60 mA at +22 dBm, so it clipped mid-
+  burst → spectral regrowth scaling with power. `sx1262_set_output_power()` now sets **OCP
+  = 140 mA (0x38)** (SX1262 datasheet value, Table 5-2); regulator stays DC-DC.
+  It keeps the per-dBm PA optimal-settings table (identical to fixed 0x04/0x07 at +22, cleaner below)
+  and is now called by `sx1262_init`, RADIO_CMD_SET_POWER, the INIT override, AND the
+  direct callers in `telemetry_service`/`command_service` (were bypassing PA/OCP/clamp).
+- **LDRO auto-calc**: `sx1262_set_modulation_params` now turns LDRO ON when the LoRa
+  symbol time exceeds 16.38 ms (SF11/12 @125k, SF12 @250k). Was hardwired off → SF11/12
+  links silently failed. No change for the SF7 default.
+- **DIO IRQ mask** now includes `CRC_ERR` so the CRC-ok flag pushed to Linux is meaningful.
+- **Datasheet audit (SX1262_datasheet.pdf, Rev 1.2) + InvertIQ bug fix**: full cross-check
+  of every command/register write in `sx1262_cmd.c` against the datasheet. All verified
+  correct — SetPaConfig (Table 13-20: deviceSel 0x00, paLut 0x01), OCP (Table 5-2: SX1262
+  = 0x38/140 mA after SetPaConfig), RampTime (Table 13-41: 0x04 = 200 µs), SetRfFrequency
+  (freq·2²⁵/32 MHz), BW/CRC/HeaderType codes, erratas 15.1/15.2/15.4 — EXCEPT one bug:
+  `SetPacketParams` wrote **InvertIQ = 0x40** for inverted, but Table 13-70 defines
+  **0x00 = standard, 0x01 = inverted** (bit 6 is not the InvertIQ field). Fixed to 0x01.
+  Consequence: the earlier "inverted IQ" path was never actually inverting (0x40 has
+  bit0=0 → chip read it as standard), so the "peer uses inverted IQ" conclusion was a
+  misdiagnosis — the peer runs standard IQ (the ground-station reference default). IQ polarity
+  now behaves per datasheet.
+- **Exhaustive datasheet audit — additional fixes**: a full line-by-line pass
+  found and fixed:
+  - `sx1262_set_rx` had leftover debug — `msleep(110)+msleep(50)` (160 ms poll-thread block
+    per RX arm) plus a `clear_irq_status(0xFFFF)` **after** SetRx that wiped an RxDone
+    arriving in that window (silent packet loss), plus per-arm `clear_dev_errors` that
+    erased real error state. Rewritten to datasheet §14.3 order: clear IRQ → SetRx → wait
+    BUSY, no post-arm delay/clear.
+  - `ClearDeviceErrors` (Table 13-86) sent only the opcode; needs opcode + 0x00 + 0x00
+    (3 bytes) — errors were never actually cleared. Fixed.
+  - `CalibrateImage` (Table 13-19) sent a spurious 4th byte; takes opcode + freq1 + freq2
+    (3 bytes). Fixed.
+  - **Rx Boosted Gain** (reg 0x08AC = 0x96, Table 9-3) added in init — the reset default
+    0x94 is power-saving (~few dB less sensitivity).
+  - `sx1262_set_frequency` now runs CalibrateImage after SetRfFrequency internally, so any
+    runtime cross-band retune stays calibrated (init step 7b removed as redundant).
+  - Removed init's bogus reads of undocumented regs 0x01D4/0x01D5/0x01D7; fixed a latent
+    `read_registers` length truncation at len≥255 (uint8_t→size_t).
+  - Everything else (SetPaConfig, SetTxParams/ramp, SetModulationParams BW/SF/CR/LDRO,
+    SetRfFrequency, OCP 0x38, RSSI/SNR offsets, erratas 15.1/15.2/15.4, IRQ bit masks,
+    read/write buffer offsets) verified correct against the datasheet.
+- **Image-cal order fix**: `calibrate_image_for_freq` now runs AFTER `set_frequency`
+  (step 7b). With the old order it ran before, leaving the image centred on the POR
+  default (~915 MHz) so RX only worked near 915 (loopback proved RX dead at 916).
+  After the fix RX works across 915-920 MHz and RSSI improved from ~-90 to ~-18 dBm.
+- **Register defines**: all hardcoded register addresses replaced by `SX1262_REG_*`
+  defines from `sx1262_regs.h` (IRQ enables, OCP, syncword, TX clamp config).
+
+**IQ polarity + interop fix:**
+- **Configurable IQ (sticky)**: `SET_PKT_PARAMS` (0x11) stores `s_iq[inst]`, applied by
+  both `radio_do_tx` and `radio_do_rx_start` — both were previously hardcoded to standard
+  IQ, making inverted-IQ links impossible. Set once via `radio_test pkt <pre> <hdr> <plen>
+  <crc> <iq>`; resets to standard on reboot.
+- **Errata 15.4 (Inverted-IQ operation)**: `sx1262_set_packet_params` now writes
+  RegIqPolaritySetup (0x0736) on every call — clears bit 2 for inverted IQ, sets it for
+  standard. Without this workaround inverted-IQ LoRa packets are frequently lost.
+- **Root cause of failed external RX** (diagnosed on hardware): the the reference peer transmits
+  with **inverted IQ + public sync 0x3444**, while our TX/RX were fixed to standard IQ. IQ
+  is the ONLY parameter legitimately configured differently for TX vs RX (LoRaWAN / ground-
+  station convention: gateway TX inverted, RX standard), so it produced the asymmetry
+  "peer receives us, we never receive peer" — total silence, no preamble detected (vs a
+  CRC/payload mismatch, which would still fire RX_DONE with crc=bad). Freq (CW centered on
+  915), RX chain (on-board loopback), and SF/BW/sync/antsw (command sweeps) were all ruled
+  out first; IQ was the only remaining hardcoded param. Verified on air:
+  `raw[4]=68 6f 6c 61 txt="hola" rssi=-92 crc=ok` at 915/SF7/BW125/public/inverted-IQ.
 
 ---
 
