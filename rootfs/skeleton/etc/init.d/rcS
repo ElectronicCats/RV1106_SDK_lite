@@ -16,11 +16,10 @@
 # rpmsg — docs/riscv-migration/40). The old sx1262.ko is obsolete (its SPI DT
 # nodes are disabled). Bind the MCU's "rpmsg-radio" channel to rpmsg_chrdev so
 # userspace can drive the radio via /dev/rpmsg (radio_test).
-# Bind both MCU rpmsg service channels to rpmsg_chrdev so userspace can reach
-# them: RadioService (SX1262 x2, ept 0x4005=16389 -> /dev/rpmsg0, radio_test)
-# and SensorService (BME280 + ICM-42670 on I2C0, ept 0x4006=16390 ->
-# /dev/rpmsg1, sensor_test). The I2C sensors are now owned by the MCU (I2C0
-# ceded in the device tree), so the old icm42670.ko / bmp280 no longer apply.
+# Bind MCU rpmsg service channels to rpmsg_chrdev so userspace can reach them:
+# RadioService  (0x4005=16389, virtio0.rpmsg-radio.-1.16389     -> /dev/rpmsg0, radio_test)
+# SensorService (0x4006=16390, virtio0.rpmsg-sensor.-1.16390    -> /dev/rpmsg1, sensor_test)
+# TelemetryService (0x4007=16391, virtio0.rpmsg-telemetry.-1.16391 -> /dev/rpmsg2, telemetry_test)
 bind_rpmsg() {
     ch="$1"
     for i in 1 2 3 4 5; do
@@ -34,3 +33,5 @@ bind_rpmsg() {
 }
 bind_rpmsg virtio0.rpmsg-radio.-1.16389
 bind_rpmsg virtio0.rpmsg-sensor.-1.16390
+bind_rpmsg virtio0.rpmsg-telemetry.-1.16391
+bind_rpmsg virtio0.rpmsg-command.-1.16392

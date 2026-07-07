@@ -45,20 +45,45 @@ static void usage(void)
 "COMANDOS DE CONTROL:\n"
 "  ping                Verifica que el servicio del MCU responde (id=RDIO).\n"
 "  reset               Reset fisico del chip (pierde init; vuelve a standby).\n"
-"  init <freq_hz>      Inicializacion completa: standby, DC-DC, LoRa SF7/BW125,\n"
-"                      calibracion, frecuencia y 14 dBm. Ej: init 915000000\n"
+"  init <freq_hz> [param=valor ...]\n"
+"                      Init + config individual de TX. Parametros nombrados en\n"
+"                      cualquier orden (los no dados usan el default):\n"
+"                        sf=5..12    bw=125|250|500   cr=1..4 (1=4/5..4=4/8)\n"
+"                        power=-9..22  pre=preamble(sim)  crc=on|off  iq=std|inv\n"
+"                        sync=pub|priv|<hex16>\n"
+"                      Default: SF7 BW125 CR4/5 pre12 CRC on 20dBm sync privada\n"
+"                      IQ std (OCP 140mA, LDRO auto, ganancia RX boosted).\n"
+"                      Ej: init 915000000 sf=9 bw=250 crc=off iq=inv\n"
+"                      Compat: init 915000000 7 125 1 20 (posicional sf bw cr pwr)\n"
 "  freq <freq_hz>      Cambia solo la frecuencia (requiere init previo).\n"
 "  power <dbm>         Potencia TX en dBm, -9 a 22 (requiere init previo).\n"
 "  cw                  Portadora continua ON (requiere init). Espectrometro.\n"
 "  stop                Standby: apaga portadora/RX. El init se conserva.\n"
 "  status              Estado. mode: 2=standby, 4=FS, 5=RX, 6=TX.\n"
 "  errors              Errores internos del chip (0x0000 = sano).\n"
-"  reg <addr_hex>      Lee un registro. Ej: reg 0740 (debe dar 0x14).\n"
+"  reg <addr_hex>      Lee un registro. Ej: reg 0740 (sync MSB; default 0x14).\n"
+"  wreg <addr_hex> <val> Escribe un registro. Ej: wreg 08E7 60 (OCP 60 mA).\n"
+"  sync <pub|priv|hex4> Sync word LoRa: pub=0x3444 (publica/LoRaWAN),\n"
+"                      priv=0x1424 (default), o hex de 16 bits (ej: 2B44).\n"
+"                      Ambos extremos DEBEN coincidir. Requiere init previo\n"
+"                      y se pierde con reset (re-aplicar tras init).\n"
 "  antsw <0|1|2>       Switch de antena: 0=auto, 1=TX, 2=RX.\n"
+"  mod <sf> <bw_khz> <cr> Configura modulacion LoRa: SF (5-12), BW en kHz\n"
+"                      (ej: 250), CR (1=4/5..4=4/8). Requiere init previo.\n"
+"  pkt <pre> <hdr> <plen> <crc> <iq> Configura params de paquete: preamble\n"
+"                      (8), hdr (0=variable, 1=fija), payload_len, CRC\n"
+"                      (0=off, 1=byte, 2=CCITT), IQ (0=std, 1=inv). El IQ queda\n"
+"                      pegajoso: se re-aplica en cada TX y RX hasta reiniciar.\n"
+"                      Ambos extremos deben usar la misma polaridad IQ.\n"
+"  pkts                Muestra RSSI y SNR del ultimo paquete recibido.\n"
+"  rssi                RSSI instantaneo (dBm).\n"
 "\n"
 "COMANDOS DE PAQUETES (LoRa, requieren init previo):\n"
 "  tx <texto>          Transmite un paquete LoRa con <texto>. Bloquea hasta\n"
 "                      TX_DONE. Ej: radio_test tx \"hola mundo\"\n"
+"  ccsds <apid> [txt]  TX paquete CCSDS SPP (header 6 bytes + payload). Muestra\n"
+"                      los bytes enviados para correlacionar con rx.\n"
+"                      Ej: radio_test ccsds 001 \"ping\"\n"
 "  rx [ms]             Escucha un paquete e imprime lo recibido (payload, RSSI,\n"
 "                      SNR, CRC). ms = ventana de escucha (por defecto 10000;\n"
 "                      0 = continuo). Ej: radio_test -r 1 rx 15000\n"
@@ -183,38 +208,80 @@ static int need_arg(int have, const char *what)
     return 1;
 }
 
-/* Wait for and print an EVT_RX / EVT_RX_TIMEOUT, skipping any late command
- * reply that may still be queued ahead of the event. */
+static const char *radio_err_str(uint8_t e)
+{
+    switch (e) {
+    case 0x00: return "OK";
+    case 0x01: return "ERROR (SPI/comm)";
+    case 0x02: return "ERROR (reset)";
+    case 0x10: return "NOT_INITED (corre 'init' primero)";
+    default:   return "ERROR (desconocido)";
+    }
+}
+
+/* Wait for and print an EVT_RX or EVT_RX_TIMEOUT. Returns 0 for EVT_RX
+ * with good CRC, 1 for bad CRC or timeout. Skips stray command replies. */
 static int wait_rx_event(int fd, int tmo_ms)
 {
     uint8_t ev[512];
-    int deadline_loops = 0;
 
-    for (;;) {
+    for (int tries = 0; tries < 10; tries++) {
         int n = rx_msg(fd, ev, sizeof(ev), tmo_ms);
-        if (n <= 0) { fprintf(stderr, "rx: sin evento (timeout).\n"); return 1; }
+        if (n <= 0) return 1;
 
         if (ev[0] == EVT_RX && n >= 7) {
-            int len = ev[3];
+            int rlen = ev[3];                       /* received payload length */
             int16_t rssi = (int16_t)(((uint16_t)ev[4] << 8) | ev[5]);
             int8_t snr = (int8_t)ev[6];
+            uint8_t *pay = &ev[7];                  /* raw LoRa payload bytes */
             int i;
 
-            printf("rx: radio=%d len=%d rssi=%d dBm snr=%d crc=%s payload=\"",
-                   ev[1], len, rssi, snr, (ev[2] & 1) ? "ok" : "BAD");
-            for (i = 0; i < len && 7 + i < n; i++)
-                putchar(isprint(ev[7 + i]) ? ev[7 + i] : '.');
-            printf("\"\n");
+            /* Always print raw hex dump first */
+            printf("rx: radio=%d raw[%d]=", ev[1], rlen);
+            for (i = 0; i < rlen && 7 + i < n; i++)
+                printf("%02x ", pay[i]);
+
+            /* Detect CCSDS SPP: version must be 0 AND the length field must be
+             * consistent with the LoRa frame (total = 6 + length_field + 1).
+             * Without the length check, random payloads whose first byte is
+             * < 0x20 get misdetected as SPP and print garbage. */
+            {
+                int dlen = (rlen >= 7) ? (((int)pay[4] << 8) | pay[5]) : -1;
+                int is_spp = (rlen >= 7 && (pay[0] >> 5) == 0x00 &&
+                              6 + dlen + 1 == rlen);
+
+                if (is_spp) {
+                    int type  = (pay[0] >> 4) & 0x01;
+                    int apid  = ((pay[0] & 0x07) << 8) | pay[1];
+                    int sflag = (pay[2] >> 6) & 0x03;
+                    int scnt  = ((pay[2] & 0x3F) << 8) | pay[3];
+
+                    /* SPP does not encode the secondary-header length in the
+                     * packet, so the data field is shown from byte 6 as-is. */
+                    printf(" SPP: %s apid=0x%03X seq=%d(0x%x) pay_len=%d data=\"",
+                           type ? "TC" : "TM", apid, scnt, sflag, dlen + 1);
+                    for (i = 6; i < rlen && i < 6 + 40 && 7 + i < n; i++)
+                        putchar(isprint(pay[i]) ? pay[i] : '.');
+                    printf("\"");
+                } else {
+                    printf(" txt=\"");
+                    for (i = 0; i < rlen && i < 40 && 7 + i < n; i++)
+                        putchar(isprint(pay[i]) ? pay[i] : '.');
+                    printf("\"");
+                }
+            }
+            printf(" rssi=%d snr=%d crc=%s\n",
+                   rssi, snr, (ev[2] & 1) ? "ok" : "BAD");
             return (ev[2] & 1) ? 0 : 1;
         }
         if (ev[0] == EVT_RX_TIMEOUT) {
-            printf("rx: radio=%d timeout (ventana de escucha agotada, sin paquete)\n",
+            printf("rx: radio=%d timeout (ventana agotada)\n",
                    n >= 2 ? ev[1] : -1);
             return 1;
         }
-        /* Not our event (a stray reply) — keep waiting, but don't loop forever. */
-        if (++deadline_loops > 4) { fprintf(stderr, "rx: evento inesperado 0x%02x\n", ev[0]); return 1; }
+        /* Stray reply — skip and keep waiting */
     }
+    return 1;
 }
 
 int main(int argc, char **argv)
@@ -247,14 +314,102 @@ int main(int argc, char **argv)
         a = (uint16_t)strtoul(argv[2], NULL, 16);
         req[0] = 0x03; req[2] = a >> 8; req[3] = a & 0xFF; len = 4;
     }
-    else if (!strcmp(cmd, "init") || !strcmp(cmd, "freq")) {
+    else if (!strcmp(cmd, "wreg")) {
+        uint16_t a, v;
+        if (need_arg(argc >= 4, "addr_hex> <val")) return 2;
+        a = (uint16_t)strtoul(argv[2], NULL, 16);
+        v = (uint8_t)strtoul(argv[3], NULL, 0);
+        req[0] = 0x04; req[2] = a >> 8; req[3] = a & 0xFF; req[4] = (uint8_t)v; len = 5;
+    }
+    else if (!strcmp(cmd, "init")) {
+        /* Robust init: freq + individual TX params as key=value, any order:
+         *   init <freq> [sf=N] [bw=N] [cr=N] [power=N] [pre=N] [crc=on|off] [iq=std|inv] [sync=pub|priv|hex]
+         * Bare numbers after freq are still accepted positionally as sf bw cr power.
+         * Unspecified params take the built-in defaults. Orchestrates
+         * INIT (0x05) + SET_PKT_PARAMS (0x11, sticky pre/crc/iq) + SET_SYNC (0x14). */
+        int sf = 7, bw = 125, cr = 1, pwr = 20, pre = 12, crc = 1, iq = 0;
+        int sync_set = 0, pos = 0, i;
+        uint16_t sw = 0x1424;
+        uint8_t q[16];
+
+        if (need_arg(argc >= 3, "freq_hz [sf=] [bw=] [cr=] [power=] [pre=] [crc=] [iq=] [sync=]")) return 2;
+        freq = (uint32_t)strtoul(argv[2], NULL, 10);
+        if (freq < 150000000U || freq > 960000000U) {
+            fprintf(stderr, "error: frecuencia fuera de rango (150000000-960000000 Hz).\n");
+            return 2;
+        }
+        for (i = 3; i < argc; i++) {
+            char *a = argv[i], *eq = strchr(a, '=');
+            if (eq) {
+                char *v = eq + 1;
+                *eq = '\0';
+                if      (!strcmp(a, "sf"))                            sf  = atoi(v);
+                else if (!strcmp(a, "bw"))                            bw  = atoi(v);
+                else if (!strcmp(a, "cr"))                            cr  = atoi(v);
+                else if (!strcmp(a, "power") || !strcmp(a, "pwr"))    pwr = atoi(v);
+                else if (!strcmp(a, "pre")   || !strcmp(a, "preamble")) pre = atoi(v);
+                else if (!strcmp(a, "crc"))  crc = (!strcmp(v, "on")  || !strcmp(v, "1")) ? 1 : 0;
+                else if (!strcmp(a, "iq"))   iq  = (!strcmp(v, "inv") || !strcmp(v, "inverted") || !strcmp(v, "1")) ? 1 : 0;
+                else if (!strcmp(a, "sync")) {
+                    if      (!strcmp(v, "pub")  || !strcmp(v, "publica")) sw = 0x3444;
+                    else if (!strcmp(v, "priv") || !strcmp(v, "privada")) sw = 0x1424;
+                    else sw = (uint16_t)strtoul(v, NULL, 16);
+                    sync_set = 1;
+                } else { fprintf(stderr, "init: parametro desconocido '%s' (usa sf/bw/cr/power/pre/crc/iq/sync).\n", a); return 2; }
+            } else {
+                int val = atoi(a);
+                if      (pos == 0) sf  = val;
+                else if (pos == 1) bw  = val;
+                else if (pos == 2) cr  = val;
+                else if (pos == 3) pwr = val;
+                pos++;
+            }
+        }
+        if (sf < 5 || sf > 12)     { fprintf(stderr, "error: sf 5-12.\n"); return 2; }
+        if (cr < 1 || cr > 4)      { fprintf(stderr, "error: cr 1-4 (1=4/5..4=4/8).\n"); return 2; }
+        if (pwr < -9 || pwr > 22)  { fprintf(stderr, "error: power -9..22 dBm.\n"); return 2; }
+        if (pre < 1 || pre > 65535){ fprintf(stderr, "error: preamble 1-65535.\n"); return 2; }
+        if (bw != 125 && bw != 250 && bw != 500) { fprintf(stderr, "error: bw 125/250/500 kHz.\n"); return 2; }
+
+        fd = open_ept();
+        if (fd < 0) return 1;
+        /* 1) base INIT (freq + sf/bw/cr/power) */
+        q[0] = 0x05; q[1] = (uint8_t)inst;
+        q[2] = freq >> 24; q[3] = freq >> 16; q[4] = freq >> 8; q[5] = (uint8_t)freq;
+        q[6] = (uint8_t)sf; q[7] = (uint8_t)(bw >> 8); q[8] = (uint8_t)bw;
+        q[9] = (uint8_t)cr; q[10] = (uint8_t)(int8_t)pwr;
+        n = xfer(fd, q, 11, rsp, sizeof(rsp), 6000);
+        if (n < 2 || rsp[1] != 0) {
+            fprintf(stderr, "init: fallo (err=0x%02x)\n", n >= 2 ? rsp[1] : 0xFF);
+            close_ept(fd); return 1;
+        }
+        /* 2) SET_PKT_PARAMS: preamble/CRC/IQ (sticky on the MCU, applied by TX+RX) */
+        q[0] = 0x11; q[1] = (uint8_t)inst;
+        q[2] = (uint8_t)(pre >> 8); q[3] = (uint8_t)pre;
+        q[4] = 0x00; q[5] = 0xFF; q[6] = (uint8_t)crc; q[7] = (uint8_t)iq;
+        n = xfer(fd, q, 8, rsp, sizeof(rsp), 3000);
+        if (n < 2 || rsp[1] != 0)
+            fprintf(stderr, "init: aviso, SET_PKT_PARAMS err=0x%02x\n", n >= 2 ? rsp[1] : 0xFF);
+        /* 3) SET_SYNC only if requested (init already set private 0x1424) */
+        if (sync_set) {
+            q[0] = 0x14; q[1] = (uint8_t)inst;
+            q[2] = (uint8_t)(sw >> 8); q[3] = (uint8_t)sw;
+            n = xfer(fd, q, 4, rsp, sizeof(rsp), 3000);
+        }
+        close_ept(fd);
+        printf("init     OK, freq=%lu Hz, SF=%d, BW=%d kHz, CR=4/%d, preamble=%d, power=%d dBm, CRC=%s, IQ=%s, sync=0x%04X (%s)\n",
+               (unsigned long)freq, sf, bw, cr + 4, pre, pwr, crc ? "on" : "off",
+               iq ? "inv" : "std", sw, sw == 0x3444 ? "pub" : sw == 0x1424 ? "priv" : "custom");
+        return 0;
+    }
+    else if (!strcmp(cmd, "freq")) {
         if (need_arg(argc >= 3, "freq_hz")) return 2;
         freq = (uint32_t)strtoul(argv[2], NULL, 10);
         if (freq < 150000000U || freq > 960000000U) {
             fprintf(stderr, "error: frecuencia fuera de rango (150000000-960000000 Hz).\n");
             return 2;
         }
-        req[0] = strcmp(cmd, "init") ? 0x06 : 0x05;
+        req[0] = 0x06;
         req[2] = freq >> 24; req[3] = freq >> 16; req[4] = freq >> 8; req[5] = freq;
         len = 6; tmo = 6000;
     }
@@ -273,6 +428,41 @@ int main(int argc, char **argv)
         if (need_arg(argc >= 3, "0|1|2")) return 2;
         req[0] = 0x0C; req[2] = (uint8_t)atoi(argv[2]); len = 3;
     }
+    else if (!strcmp(cmd, "mod")) {
+        uint32_t bw_khz;
+        if (need_arg(argc >= 5, "sf> <bw_khz> <cr")) return 2;
+        req[2] = (uint8_t)atoi(argv[2]);   /* SF */
+        bw_khz = (uint32_t)strtoul(argv[3], NULL, 10);
+        req[3] = (uint8_t)((bw_khz >> 8) & 0xFF);
+        req[4] = (uint8_t)(bw_khz & 0xFF);
+        req[5] = (uint8_t)atoi(argv[4]);   /* CR */
+        req[0] = 0x10; len = 6;
+    }
+    else if (!strcmp(cmd, "pkt")) {
+        uint16_t pre;
+        if (need_arg(argc >= 7, "pre> <hdr> <plen> <crc> <iq")) return 2;
+        pre = (uint16_t)strtoul(argv[2], NULL, 10);
+        req[2] = (uint8_t)(pre >> 8);
+        req[3] = (uint8_t)pre;
+        req[4] = (uint8_t)atoi(argv[3]);   /* header type */
+        req[5] = (uint8_t)atoi(argv[4]);   /* payload len */
+        req[6] = (uint8_t)atoi(argv[5]);   /* CRC */
+        req[7] = (uint8_t)atoi(argv[6]);   /* IQ invert */
+        req[0] = 0x11; len = 8;
+    }
+    else if (!strcmp(cmd, "pkts"))  req[0] = 0x12;
+    else if (!strcmp(cmd, "rssi"))  req[0] = 0x13;
+    else if (!strcmp(cmd, "sync")) {
+        uint16_t sw;
+        if (need_arg(argc >= 3, "pub|priv|hex16")) return 2;
+        if (!strcmp(argv[2], "pub") || !strcmp(argv[2], "publica"))
+            sw = 0x3444;                               /* LoRaWAN / red publica */
+        else if (!strcmp(argv[2], "priv") || !strcmp(argv[2], "privada"))
+            sw = 0x1424;                               /* default de fabrica */
+        else
+            sw = (uint16_t)strtoul(argv[2], NULL, 16);
+        req[0] = 0x14; req[2] = (uint8_t)(sw >> 8); req[3] = (uint8_t)sw; len = 4;
+    }
     else if (!strcmp(cmd, "tx")) {
         int plen;
         if (need_arg(argc >= 3, "texto")) return 2;
@@ -282,8 +472,54 @@ int main(int argc, char **argv)
         memcpy(&req[3], argv[2], plen);
         len = 3 + plen; tmo = 6000;   /* handler blocks until TX_DONE */
     }
+    else if (!strcmp(cmd, "ccsds")) {
+        /* Build and transmit a CCSDS SPP packet (6-byte header + payload).
+         * Usage: radio_test ccsds <apid_hex> [texto]
+         * Example: radio_test ccsds 001 "hola"
+         * Sends: [ver=0,type=TC(1),sec=0,apid][seq_flags=3(unsg),seq=0][len-1][payload]
+         */
+        uint16_t apid;
+        uint8_t  hdr[6];
+        int      plen;
+        uint16_t ident, seq, dlen_be;
+
+        if (need_arg(argc >= 3, "apid_hex")) return 2;
+        apid = (uint16_t)(strtoul(argv[2], NULL, 16) & 0x07FF);
+
+        /* SPP data field must be >= 1 byte; with no text send one 0x00 pad */
+        plen = (argc >= 4) ? (int)strlen(argv[3]) : 0;
+        if (plen > 250) plen = 250;
+
+        /* Build SPP primary header (big-endian) */
+        ident  = (0x0 << 13) | (0x1 << 12) | (0x0 << 11) | apid;  /* TC type */
+        seq    = (0x3 << 14) | 0x0000;                              /* unsegmented, count=0 */
+        dlen_be = (uint16_t)((plen > 0 ? plen : 1) - 1);            /* CCSDS length = payload-1 */
+
+        hdr[0] = (uint8_t)(ident >> 8);
+        hdr[1] = (uint8_t)ident;
+        hdr[2] = (uint8_t)(seq >> 8);
+        hdr[3] = (uint8_t)seq;
+        hdr[4] = (uint8_t)(dlen_be >> 8);
+        hdr[5] = (uint8_t)dlen_be;
+
+        memcpy(&req[3], hdr, 6);                       /* SPP header: req[3..8] */
+        if (plen > 0)
+            memcpy(&req[9], argv[3], plen);            /* payload AFTER the 6-byte header */
+        else {
+            req[9] = 0x00; plen = 1;                   /* pad byte, matches dlen_be = 0 */
+        }
+        req[0] = 0x0D;
+        req[2] = (uint8_t)(6 + plen);                  /* total LoRa payload = header + text */
+        len = 3 + 6 + plen; tmo = 6000;
+
+        printf("ccsds: SPP header:");
+        for (int i = 0; i < 6; i++) printf(" %02x", hdr[i]);
+        if (plen) printf(" | payload=\"%s\"", argv[3]);
+        printf(" (%d bytes total via LoRa)\n", 6 + plen);
+    }
     else if (!strcmp(cmd, "rx")) {
         int rx_ms = (argc >= 3) ? atoi(argv[2]) : 10000;
+        int total_timeout = (rx_ms == 0) ? 3600000 : rx_ms + 1500;
         req[0] = 0x0E; req[2] = (uint8_t)(rx_ms >> 8); req[3] = (uint8_t)rx_ms; len = 4;
 
         fd = open_ept();
@@ -296,16 +532,21 @@ int main(int argc, char **argv)
                 fprintf(stderr, "rx_start fallo (n=%d err=0x%02x)\n", n, n >= 2 ? rsp[1] : 0xFF);
             close_ept(fd); return 1;
         }
-        printf("rx: escuchando radio %d %s...\n", inst,
-               rx_ms ? "" : "(continuo, Ctrl-C para salir)");
-        if (rx_ms == 0) {
-            /* continuous: the MCU re-arms after each packet; keep printing. */
-            for (;;)
-                (void)wait_rx_event(fd, 3600000);
+        if (rx_ms)
+            printf("rx: escuchando radio %d por hasta %d segundos...\n",
+                   inst, (rx_ms + 999) / 1000);
+        else
+            printf("rx: escuchando radio %d (continuo, Ctrl-C para salir)...\n", inst);
+        /* Loop: receive ALL packets within the window */
+        for (;;) {
+            int rc = wait_rx_event(fd, total_timeout);
+            if (rc != 0) break;  /* timeout or bad CRC */
+            /* got a good packet — keep listening for more */
         }
-        n = wait_rx_event(fd, rx_ms + 1500);
+        /* If we get here, the MCU will timeout via s_rx_deadline and
+         * send EVT_RX_TIMEOUT, or user Ctrl-C'd */
         close_ept(fd);
-        return n;
+        return 0;
     }
     else if (!strcmp(cmd, "loopback")) {
         /* Self-contained on-board test: radio0 transmits, radio1 receives.
@@ -380,16 +621,35 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    printf("%s: err=0x%02x", cmd, rsp[1]);
-    if (req[0] == 0x01 && n >= 6) printf(" id=%c%c%c%c v%d", rsp[2], rsp[3], rsp[4], rsp[5], rsp[6]);
+    printf("%-7s  %s", cmd, radio_err_str(rsp[1]));
+    if (req[0] == 0x01 && n >= 6) printf(", id=%c%c%c%c v%d", rsp[2], rsp[3], rsp[4], rsp[5], rsp[6]);
+    if (req[0] == 0x05 && rsp[1] == 0x00) {   /* init: show config details */
+        uint32_t f = ((uint32_t)req[2] << 24) | ((uint32_t)req[3] << 16) |
+                     ((uint32_t)req[4] << 8) | req[5];
+        if (len >= 11)
+            printf(", freq=%lu Hz, SF=%d, BW=%d kHz, CR=%d, power=%d dBm, CRC=off",
+                   (unsigned long)f, req[6], ((int)req[7]<<8)|req[8], req[9], (int8_t)req[10]);
+        else
+            printf(", freq=%lu Hz, SF=7, BW=125 kHz, CR=4/5, preamble=12, "
+                   "power=20 dBm, sync=privada 0x1424, CRC=on (defaults)",
+                   (unsigned long)f);
+    }
     if ((req[0] == 0x02 || req[0] == 0x0A) && n >= 3)
-        printf(" status=0x%02x mode=%d%s", rsp[2], (rsp[2] >> 4) & 7,
+        printf(", status=0x%02x mode=%d%s", rsp[2], (rsp[2] >> 4) & 7,
                (((rsp[2] >> 4) & 7) == 6) ? " (TX)" :
                (((rsp[2] >> 4) & 7) == 5) ? " (RX)" :
                (((rsp[2] >> 4) & 7) == 2) ? " (standby)" : "");
-    if (req[0] == 0x03 && n >= 3) printf(" val=0x%02x", rsp[2]);
-    if (req[0] == 0x0B && n >= 4) printf(" dev_errors=0x%02x%02x%s", rsp[2], rsp[3],
-                                          (rsp[2] | rsp[3]) ? " (hay errores)" : " (sano)");
+    if (req[0] == 0x03 && n >= 3) printf(", val=0x%02x", rsp[2]);
+    if (req[0] == 0x0B && n >= 4) printf(", dev_errors=0x%02x%02x%s", rsp[2], rsp[3],
+                                          (rsp[2] | rsp[3]) ? " (ERROR)" : " (sano)");
+    if (req[0] == 0x12 && n >= 5) printf(", rssi=%d dBm snr=%d", (int16_t)((rsp[2]<<8)|rsp[3]), (int8_t)rsp[4]);
+    if (req[0] == 0x13 && n >= 4) printf(", rssi=%d dBm", (int16_t)((rsp[2]<<8)|rsp[3]));
+    if (req[0] == 0x14 && rsp[1] == 0x00) {
+        uint16_t sw = ((uint16_t)req[2] << 8) | req[3];
+        printf(", sync=0x%04X (%s)", sw,
+               sw == 0x3444 ? "publica/LoRaWAN" :
+               sw == 0x1424 ? "privada, default" : "custom");
+    }
     printf("\n");
 
     return rsp[1] ? 1 : 0;
