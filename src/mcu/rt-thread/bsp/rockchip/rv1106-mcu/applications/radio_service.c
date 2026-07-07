@@ -24,6 +24,12 @@
  *                                                         blocks until TX_DONE)
  *   0x0E RX_START   t_hi t_lo  -> [0x0E,err]             (listen; t=ms, 0=cont.)
  *   0x0F RX_STOP               -> [0x0F,err]
+ *   0x10 SET_MOD_PARAMS sf bw_h bw_l cr -> [0x10,err]
+ *   0x11 SET_PKT_PARAMS pre_h pre_l hdr plen crc iq -> [0x11,err]
+ *   0x12 GET_PKT_STATUS        -> [0x12,err,rssi_h,rssi_l,snr]
+ *   0x13 GET_RSSI_INST         -> [0x13,err,rssi_h,rssi_l]
+ *   0x14 SET_SYNC   sw_h sw_l  -> [0x14,err]  (LoRa sync word: 0x1424 privada
+ *                                              [default], 0x3444 publica/LoRaWAN)
  *
  * Unsolicited events (MCU -> host, pushed from the poll loop):
  *   0xE0 EVT_RX   [0xE0,inst,flags,len,rssi_hi,rssi_lo,snr, data..]
@@ -68,6 +74,11 @@
 #define RADIO_CMD_TX            (0x0DU)   /* [len][payload...] */
 #define RADIO_CMD_RX_START      (0x0EU)   /* [t_hi][t_lo] ms, 0=continuous */
 #define RADIO_CMD_RX_STOP       (0x0FU)
+#define RADIO_CMD_SET_MOD_PARAMS (0x10U)  /* [sf][bw_h][bw_l][cr] */
+#define RADIO_CMD_SET_PKT_PARAMS (0x11U)  /* [pre_h][pre_l][hdr][plen][crc][iq] */
+#define RADIO_CMD_GET_PKT_STATUS (0x12U)  /* returns [rssi_h][rssi_l][snr] */
+#define RADIO_CMD_GET_RSSI_INST  (0x13U)  /* returns [rssi_h][rssi_l] */
+#define RADIO_CMD_SET_SYNC       (0x14U)  /* [sw_h][sw_l]: 0x1424 priv / 0x3444 pub */
 
 #define RADIO_EVT_RX            (0xE0U)
 #define RADIO_EVT_RX_TIMEOUT    (0xE1U)
@@ -86,11 +97,18 @@ static struct rpmsg_lite_endpoint *s_rs_ept;
 static uint32_t s_host_addr;                 /* last host ept addr, for deferred replies */
 static uint32_t s_rx_host[N_RADIO];          /* host that armed each radio's RX (event dst) */
 
-static struct sx1262_device s_radio[N_RADIO];
+struct sx1262_device s_radio[N_RADIO];  /* non-static: used by telemetry_service.c */
 static bool s_ready[N_RADIO];                /* port (SPI/pins) initialized */
 static bool s_inited[N_RADIO];               /* sx1262_init() done */
 static volatile bool s_rx_active[N_RADIO];   /* listening; poll watches DIO1 */
 static volatile bool s_rx_cont[N_RADIO];     /* continuous RX: re-arm, don't stop */
+static uint32_t s_rx_deadline[N_RADIO];      /* ms tick when RX expires (0 = no deadline) */
+/* Sticky packet-shape params, applied by radio_do_tx/rx_start (set via
+ * SET_PKT_PARAMS 0x11). Defaults match sx1262_init:
+ * preamble 12, CRC on, IQ standard. Both link ends must agree on all three. */
+static uint8_t  s_iq[N_RADIO];                     /* 0=std, 1=inverted */
+static uint16_t s_preamble[N_RADIO] = { 12, 12 };  /* LoRa preamble symbols */
+static uint8_t  s_crc[N_RADIO]      = { 1, 1 };    /* 0=off, 1=on */
 
 /* Deferred command reply: the rx callback runs INSIDE the poll thread's vring
  * drain; sending from that context froze the drain, so we queue the reply and
@@ -123,8 +141,9 @@ static int radio_do_tx(int inst, const uint8_t *data, uint8_t len)
     s_rx_active[inst] = false;      /* TX preempts any listen */
     s_rx_cont[inst]   = false;
 
-    /* LoRa TX transmits exactly SetPacketParams.payloadLength bytes. */
-    err = sx1262_set_packet_params(d, 8, 0, len, 1, 0);
+    /* LoRa TX transmits exactly SetPacketParams.payloadLength bytes.
+     * on-air defaults: preamble 12, CRC on, IQ from sticky s_iq. */
+    err = sx1262_set_packet_params(d, s_preamble[inst], 0, len, s_crc[inst], s_iq[inst]);
     if (err) return err;
     err = sx1262_write_buffer(d, 0x00, data, len);
     if (err) return err;
@@ -140,20 +159,29 @@ static int radio_do_tx(int inst, const uint8_t *data, uint8_t len)
     return err;
 }
 
-/* Arm continuous/one-shot RX. Non-blocking afterwards: the poll loop delivers. */
+/* Arm continuous/one-shot RX. Non-blocking afterwards: the poll loop delivers.
+ * If timeout_ms > 0, the chip will fire IRQ_TIMEOUT after that window, but
+ * after each received packet we re-arm RX with the remaining time so that
+ * multiple packets can be captured within the same window. */
 static int radio_do_rx_start(int inst, uint32_t timeout_ms)
 {
     struct sx1262_device *d = &s_radio[inst];
     int err;
 
-    /* Variable-length header, CRC on, max payload for RX. */
-    err = sx1262_set_packet_params(d, 8, 0, 0xFF, 1, 0);
+    /* Explicit header, max payload for RX. Defaults: preamble 12,
+     * CRC on, IQ from sticky s_iq. Explicit header auto-adapts to TX CRC. */
+    err = sx1262_set_packet_params(d, s_preamble[inst], 0, 0xFF, s_crc[inst], s_iq[inst]);
     if (err) return err;
+
+    /* Always use continuous mode on the chip; we manage timeouts via
+     * s_rx_deadline and re-arm after each packet with remaining time. */
     sx1262_clear_irq_status(d, SX1262_IRQ_ALL);
     err = sx1262_set_rx(d, timeout_ms);
     if (err == 0) {
-        s_rx_cont[inst]   = (timeout_ms == 0);  /* 0 = continuous: keep listening */
+        s_rx_cont[inst]   = true;    /* always re-arm — we stop via deadline */
         s_rx_active[inst] = true;
+        s_rx_deadline[inst] = (timeout_ms > 0) ?
+            (rt_tick_get() * 1000U / RT_TICK_PER_SECOND + timeout_ms) : 0;
     }
     return err;
 }
@@ -193,6 +221,23 @@ void radio_service_poll(void)
 
         if (!s_rx_active[inst])
             continue;
+
+        /* Check software deadline for timed RX */
+        if (s_rx_deadline[inst] > 0) {
+            uint32_t now_ms = rt_tick_get() * 1000U / RT_TICK_PER_SECOND;
+            if (now_ms >= s_rx_deadline[inst]) {
+                uint8_t ev[2] = { RADIO_EVT_RX_TIMEOUT, (uint8_t)inst };
+                MARK(0xff6ff864, 0xE1000000U | (uint32_t)inst);
+                (void)rpmsg_lite_send(s_rs_inst, s_rs_ept, s_rx_host[inst],
+                                      (char *)ev, sizeof(ev), RL_DONT_BLOCK);
+                s_rx_active[inst] = false;
+                s_rx_deadline[inst] = 0;
+                sx1262_set_standby(d, SX1262_STANDBY_RC);
+                sx1262_set_antsw(d, SX1262_ANTSW_AUTO);
+                continue;
+            }
+        }
+
         if (!sx1262_dio1_is_high(d))     /* cheap GPIO check, no SPI */
             continue;
         if (sx1262_get_irq_status(d, &irq) != 0)
@@ -221,13 +266,19 @@ void radio_service_poll(void)
             (void)rpmsg_lite_send(s_rs_inst, s_rs_ept, s_rx_host[inst],
                                   (char *)s_evt_buf, 7U + len, RL_DONT_BLOCK);
             sx1262_clear_irq_status(d, SX1262_IRQ_ALL);
-            if (s_rx_cont[inst]) {
-                /* continuous RX: chip stays in RX (0xFFFFFF timeout); just
-                 * clear the IRQ and keep listening for the next packet. */
-            } else {
-                s_rx_active[inst] = false;
-                sx1262_set_standby(d, SX1262_STANDBY_RC);
-                sx1262_set_antsw(d, SX1262_ANTSW_AUTO);
+
+            /* Re-arm RX for more packets if deadline still allows */
+            if (s_rx_deadline[inst] > 0) {
+                uint32_t now_ms = rt_tick_get() * 1000U / RT_TICK_PER_SECOND;
+                if (now_ms < s_rx_deadline[inst]) {
+                    uint32_t remain = s_rx_deadline[inst] - now_ms;
+                    sx1262_set_rx(d, remain);
+                } else {
+                    s_rx_active[inst] = false;
+                    s_rx_deadline[inst] = 0;
+                    sx1262_set_standby(d, SX1262_STANDBY_RC);
+                    sx1262_set_antsw(d, SX1262_ANTSW_AUTO);
+                }
             }
         }
         else if (irq & SX1262_IRQ_TIMEOUT)
@@ -238,7 +289,7 @@ void radio_service_poll(void)
             (void)rpmsg_lite_send(s_rs_inst, s_rs_ept, s_rx_host[inst],
                                   (char *)ev, sizeof(ev), RL_DONT_BLOCK);
             s_rx_active[inst] = false;
-            s_rx_cont[inst] = false;
+            s_rx_deadline[inst] = 0;
             sx1262_clear_irq_status(d, SX1262_IRQ_ALL);
             sx1262_set_antsw(d, SX1262_ANTSW_AUTO);
         }
@@ -343,6 +394,15 @@ static int32_t radio_rx(void *payload, uint32_t payload_len, uint32_t src, void 
             err = sx1262_init(&s_radio[inst], freq);
         if (err == 0)
             s_inited[inst] = true;
+        /* Optional overrides:  [sf, bw>>8, bw, cr, power_dbm] */
+        if (err == 0 && payload_len >= 11) {
+            uint8_t  sf    = req[6];
+            uint32_t bw    = ((uint32_t)req[7] << 8) | req[8];
+            uint8_t  cr    = req[9];
+            int8_t   power = (int8_t)req[10];
+            sx1262_set_modulation_params(&s_radio[inst], sf, bw * 1000U, cr, false);
+            sx1262_set_output_power(&s_radio[inst], power);
+        }
         rsp[1] = (uint8_t)(-err);
         rsp_len = 2;
         break;
@@ -369,7 +429,7 @@ static int32_t radio_rx(void *payload, uint32_t payload_len, uint32_t src, void 
         err = radio_lazy_init(inst);
         if (err == 0 && !s_inited[inst]) { rsp[1] = RADIO_ERR_NOT_INITED; rsp_len = 2; break; }
         if (err == 0)
-            err = sx1262_set_tx_params(&s_radio[inst], (int8_t)req[2], 0x04);
+            err = sx1262_set_output_power(&s_radio[inst], (int8_t)req[2]);
         rsp[1] = (uint8_t)(-err);
         rsp_len = 2;
         break;
@@ -476,6 +536,89 @@ static int32_t radio_rx(void *payload, uint32_t payload_len, uint32_t src, void 
         rsp_len = 2;
         break;
 
+    case RADIO_CMD_SET_MOD_PARAMS:
+    {
+        uint8_t  sf;
+        uint32_t bw;
+        uint8_t  cr;
+        if (payload_len < 6U) return RL_RELEASE;
+        sf = req[2];
+        bw = ((uint32_t)req[3] << 8) | req[4];
+        cr = req[5];
+        err = radio_lazy_init(inst);
+        if (err == 0 && !s_inited[inst]) { rsp[1] = RADIO_ERR_NOT_INITED; rsp_len = 2; break; }
+        if (err == 0)
+            err = sx1262_set_modulation_params(&s_radio[inst], sf, bw * 1000U, cr, false);
+        rsp[1] = (uint8_t)(-err);
+        rsp_len = 2;
+        break;
+    }
+
+    case RADIO_CMD_SET_PKT_PARAMS:
+    {
+        uint16_t preamble;
+        uint8_t  hdr, plen, crc, iq;
+        if (payload_len < 8U) return RL_RELEASE;
+        preamble = ((uint16_t)req[2] << 8) | req[3];
+        hdr   = req[4];
+        plen  = req[5];
+        crc   = req[6];
+        iq    = req[7];
+        /* Store all three sticky, applied by radio_do_tx/rx_start. */
+        s_preamble[inst] = preamble ? preamble : 12U;
+        s_crc[inst]      = crc ? 1U : 0U;
+        s_iq[inst]       = iq ? 1U : 0U;
+        err = radio_lazy_init(inst);
+        if (err == 0 && !s_inited[inst]) { rsp[1] = RADIO_ERR_NOT_INITED; rsp_len = 2; break; }
+        if (err == 0)
+            err = sx1262_set_packet_params(&s_radio[inst], preamble, hdr, plen, crc, iq);
+        rsp[1] = (uint8_t)(-err);
+        rsp_len = 2;
+        break;
+    }
+
+    case RADIO_CMD_GET_PKT_STATUS:
+    {
+        int16_t rssi = 0;
+        int8_t  snr  = 0;
+        err = radio_lazy_init(inst);
+        if (err == 0)
+            err = sx1262_get_packet_status(&s_radio[inst], &rssi, &snr);
+        rsp[1] = (uint8_t)(-err);
+        rsp[2] = (uint8_t)(rssi >> 8);
+        rsp[3] = (uint8_t)rssi;
+        rsp[4] = (uint8_t)snr;
+        rsp_len = 5;
+        break;
+    }
+
+    case RADIO_CMD_SET_SYNC:
+    {
+        uint16_t sw;
+        if (payload_len < 4U) return RL_RELEASE;
+        sw = ((uint16_t)req[2] << 8) | req[3];
+        err = radio_lazy_init(inst);
+        if (err == 0 && !s_inited[inst]) { rsp[1] = RADIO_ERR_NOT_INITED; rsp_len = 2; break; }
+        if (err == 0)
+            err = sx1262_set_sync_word(&s_radio[inst], sw);
+        rsp[1] = (uint8_t)(-err);
+        rsp_len = 2;
+        break;
+    }
+
+    case RADIO_CMD_GET_RSSI_INST:
+    {
+        int16_t rssi = 0;
+        err = radio_lazy_init(inst);
+        if (err == 0)
+            err = sx1262_get_rssi_inst(&s_radio[inst], &rssi);
+        rsp[1] = (uint8_t)(-err);
+        rsp[2] = (uint8_t)(rssi >> 8);
+        rsp[3] = (uint8_t)rssi;
+        rsp_len = 4;
+        break;
+    }
+
     default:
         rsp[1] = 0xEE;   /* unknown command */
         rsp_len = 2;
@@ -500,6 +643,59 @@ int radio_service_attach(struct rpmsg_lite_instance *inst)
     rpmsg_ns_announce(inst, s_rs_ept, RADIO_EPT_NAME, RL_NS_CREATE);
     MARK(0xff6ff858, 0xAD000001U);   /* service attached+announced */
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Exported API for TelemetryService (direct TX, no rpmsg)           */
+/* ------------------------------------------------------------------ */
+
+int radio_tx(int inst, const uint8_t *data, uint8_t len)
+{
+    if (inst < 0 || inst >= N_RADIO) return -1;
+    return radio_do_tx(inst, data, len);
+}
+
+int radio_ensure_ready(int inst, uint32_t freq_hz)
+{
+    int err;
+
+    if (inst < 0 || inst >= N_RADIO) return -1;
+    err = radio_lazy_init(inst);
+    if (err) return err;
+    if (!s_inited[inst]) {
+        err = sx1262_init(&s_radio[inst], freq_hz);
+        if (err == 0)
+            s_inited[inst] = true;
+    }
+    return err;
+}
+
+int radio_config_lora(int inst, uint32_t freq_hz, uint8_t sf,
+                       uint32_t bw, uint8_t cr)
+{
+    struct sx1262_device *d;
+
+    if (inst < 0 || inst >= N_RADIO) return -1;
+    if (!s_inited[inst]) return -1;
+    d = &s_radio[inst];
+
+    sx1262_set_frequency(d, freq_hz);
+    sx1262_set_modulation_params(d, sf, bw, cr, false);
+    return 0;
+}
+
+int radio_stop_rx(int inst)
+{
+    if (inst < 0 || inst >= N_RADIO) return -1;
+    radio_do_rx_stop(inst);
+    return 0;
+}
+
+/* True while a Linux client (radio_test rx) has this radio's RX armed.
+ * command_service checks this so it never steals packets from the host. */
+bool radio_rx_owned_by_host(int inst)
+{
+    return (inst >= 0 && inst < N_RADIO) ? s_rx_active[inst] : false;
 }
 
 #endif /* RT_USING_RPMSG_LITE && !IPC_RAW_MBOX_TEST */
