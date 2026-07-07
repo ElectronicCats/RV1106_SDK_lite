@@ -10,7 +10,7 @@ vuelo CubeSat desde Linux (Cortex-A7) al coprocesador RISC-V **Syntacore SCR1**
 Luckfox como referencia, el diseño de la migración por driver, y la
 implementación verificada en placa.
 
-**Estado (2026-07-03):** arranque dual A7+MCU **FUNCIONANDO**; **RadioService**
+**Estado:** arranque dual A7+MCU **FUNCIONANDO**; **RadioService**
 (SX1262 ×2 sobre SPI) y **SensorService** (BME280 + ICM-42670 sobre I²C0)
 **validados en placa**. Ambos servicios coexisten en el mismo hilo de poll.
 

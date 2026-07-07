@@ -10,7 +10,7 @@ RT-Thread), over rpmsg IPC. Covers the study of the project and of the Luckfox
 SDK as a reference, the per-driver migration design, and the on-board verified
 implementation.
 
-**Status (2026-07-03):** dual boot A7+MCU **WORKING**; **RadioService**
+**Status:** dual boot A7+MCU **WORKING**; **RadioService**
 (SX1262 ×2 over SPI) and **SensorService** (BME280 + ICM-42670 over I²C0)
 **validated on hardware**. Both services coexist on the same poll thread.
 

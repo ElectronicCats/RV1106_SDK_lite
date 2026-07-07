@@ -100,9 +100,9 @@ Reservar **1 MB en el tope de la DDR** para los vrings RPMsg, idéntico en ambos
 3. Iterar sobre los parámetros de co-diseño (§3) y la semántica de IRQ/mailbox del
    `rpmsg_platform.c` (marcado *UNVERIFIED*) hasta lograr el eco.
 
-## 6bis. Arranque del HPMCU — mecanismo real (hallazgos en placa, 2026-06-30)
+## 6bis. Arranque del HPMCU — mecanismo real (hallazgos en placa)
 
-> **⚠️ SUPERSEDED (2026-07-02).** Esta sección es HISTÓRICA: el arranque
+> **⚠️ SUPERSEDED.** Esta sección es HISTÓRICA: el arranque
 > definitivo (bootrom→0x40000 + FIT `mcu0` con release directo, SIN wrap ni
 > trampolín) y el transporte final están en los docs **80** y **90**. Los
 > hallazgos "el bootrom no funcionó" y "el A7 no puede escribir 0x40000" eran

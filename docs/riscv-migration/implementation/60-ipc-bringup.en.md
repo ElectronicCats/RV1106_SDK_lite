@@ -100,9 +100,9 @@ Reserve **1 MB at the top of DDR** for the RPMsg vrings, identical on both sides
 3. Iterate over the co-design parameters (§3) and the IRQ/mailbox semantics of
    `rpmsg_platform.c` (marked *UNVERIFIED*) until the echo is achieved.
 
-## 6bis. HPMCU boot — real mechanism (on-board findings, 2026-06-30)
+## 6bis. HPMCU boot — real mechanism (on-board findings)
 
-> **⚠️ SUPERSEDED (2026-07-02).** This section is HISTORICAL: the definitive
+> **⚠️ SUPERSEDED.** This section is HISTORICAL: the definitive
 > boot (bootrom→0x40000 + FIT `mcu0` with direct release, WITHOUT wrap nor
 > trampoline) and the final transport are in docs **80** and **90**. The
 > findings "the bootrom did not work" and "the A7 cannot write 0x40000" were

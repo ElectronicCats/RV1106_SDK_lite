@@ -1,6 +1,6 @@
 # 80 — Dual boot A7 (Linux) + HPMCU (RT-Thread): architecture and debugging
 
-> **Status: WORKING (2026-07-02).** Linux boots to shell with the kernel
+> **Status: WORKING.** Linux boots to shell with the kernel
 > at `0x208000` and the MCU runs RT-Thread with a heartbeat advancing
 > (`devmem 0xff6ff900` → increasing `0xB000xxxx`) indefinitely. This
 > document fixes the boot architecture that makes it possible, the chain of

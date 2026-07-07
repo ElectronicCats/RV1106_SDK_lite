@@ -1,6 +1,6 @@
 # 80 — Arranque dual A7 (Linux) + HPMCU (RT-Thread): arquitectura y depuración
 
-> **Estado: FUNCIONANDO (2026-07-02).** Linux arranca hasta shell con el kernel
+> **Estado: FUNCIONANDO.** Linux arranca hasta shell con el kernel
 > en `0x208000` y el MCU ejecuta RT-Thread con heartbeat avanzando
 > (`devmem 0xff6ff900` → `0xB000xxxx` creciente) de forma indefinida. Este
 > documento fija la arquitectura de arranque que lo hace posible, la cadena de
