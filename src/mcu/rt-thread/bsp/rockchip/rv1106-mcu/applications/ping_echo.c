@@ -115,12 +115,21 @@ static void ping_echo_thread(void *arg)
     /* Attach the migrated device services (extra endpoints on the same
      * instance; their callbacks are dispatched from this thread's vring drain
      * below). RadioService = SX1262 x2 (SPI); SensorService = BME280 +
-     * ICM-42670 (I2C0). */
+     * ICM-42670 (I2C0). TelemetryService = periodic sensor SPP TX.
+     * CommandService = uplink RX + TC dispatch. */
     {
         extern int radio_service_attach(struct rpmsg_lite_instance *inst);
         extern int sensor_service_attach(struct rpmsg_lite_instance *inst);
+        extern int telemetry_service_attach(struct rpmsg_lite_instance *inst);
+        extern int telemetry_service_init(void);
+        extern int command_service_attach(struct rpmsg_lite_instance *inst);
+        extern int command_service_init_default(void);
         (void)radio_service_attach(s_inst);
         (void)sensor_service_attach(s_inst);
+        (void)telemetry_service_attach(s_inst);
+        (void)telemetry_service_init();
+        (void)command_service_attach(s_inst);
+        (void)command_service_init_default();
     }
 
     /* Steady-state RX poll: drain the vrings every 2 ms forever; flush any
@@ -129,11 +138,19 @@ static void ping_echo_thread(void *arg)
     {
         extern void radio_service_poll(void);
         extern void sensor_service_poll(void);
+        extern void telemetry_service_poll(void);
+        extern void telemetry_service_poll_flush(void);
+        extern void command_service_poll(void);
+        extern void command_service_poll_flush(void);
 
         MARK(0xff6ff844, 0xCAB00000 | (n++ & 0xFFFFF));
         rpmsg_rv1106_rx_poll();
+        telemetry_service_poll_flush();
+        command_service_poll_flush();
         radio_service_poll();
         sensor_service_poll();
+        telemetry_service_poll();
+        command_service_poll();
         rt_thread_mdelay(2);
     }
 }
