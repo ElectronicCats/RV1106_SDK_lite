@@ -137,20 +137,19 @@ static void ping_echo_thread(void *arg)
     while (1)
     {
         extern void radio_service_poll(void);
-        extern void sensor_service_poll(void);
         extern void telemetry_service_poll(void);
         extern void telemetry_service_poll_flush(void);
-        extern void command_service_poll(void);
         extern void command_service_poll_flush(void);
+        extern void command_service_telemetry_worker(void);
 
         MARK(0xff6ff844, 0xCAB00000 | (n++ & 0xFFFFF));
         rpmsg_rv1106_rx_poll();
         telemetry_service_poll_flush();
+        radio_service_poll();      /* must run before flush — sets s_evt_pending */
         command_service_poll_flush();
-        radio_service_poll();
         sensor_service_poll();
+        command_service_telemetry_worker();
         telemetry_service_poll();
-        command_service_poll();
         rt_thread_mdelay(2);
     }
 }

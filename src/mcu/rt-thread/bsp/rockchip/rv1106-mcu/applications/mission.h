@@ -17,13 +17,13 @@
 /* Uplink (radio0): always listening for TC */
 #define UPLINK_FREQ     918000000U
 #define UPLINK_SF       7
-#define UPLINK_BW       125000U       /* BW125 */
-#define UPLINK_CR       1       /* 4/5 */
+#define UPLINK_BW       250000U       /* BW250 — FlatSat_Firmware ruplink.h UPLINK_BW=250 */
+#define UPLINK_CR       1       /* 4/5 (RadioLib setCodingRate(5)) */
 
 /* Downlink (radio1): telemetry TX + TC response TX */
 #define DOWNLINK_FREQ   916000000U
 #define DOWNLINK_SF     7
-#define DOWNLINK_BW     125000U       /* BW125 */
+#define DOWNLINK_BW     250000U       /* BW250 — FlatSat_Firmware rdownlink.h DOWNLINK_BW=250 */
 #define DOWNLINK_CR     1       /* 4/5 */
 #define DOWNLINK_POWER  20
 

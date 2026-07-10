@@ -137,6 +137,8 @@ int spp_idle_build_packet(space_packet_t *pkt)
 int spp_unpack_packet(space_packet_t *pkt, const uint8_t *buffer,
                        uint16_t buffer_len)
 {
+    if (pkt == NULL)
+        return SPP_ERROR_INVALID_BUFFER;
     if (buffer_len < SPP_PRIMARY_HEADER_LEN)
         return SPP_ERROR_PACKET_LEN;
     if (buffer == NULL)
@@ -153,14 +155,24 @@ int spp_unpack_packet(space_packet_t *pkt, const uint8_t *buffer,
     if (version != CCSDS_SPP_VERSION)
         return SPP_ERROR_VERSION;
 
-    /* CCSDS length field = data-field bytes - 1; actual data = field + 1 */
+    /* CCSDS length field = data-field bytes - 1; actual data = field + 1.
+     *
+     * VULN #9 (inherited from FlatSat — intentional for the CTF):
+     *   1) The check uses `field` (not `field + 1`) against MAX, same as
+     *      FlatSat: it allows field == SPP_MAX_PAYLOAD_CHUNK and then copies
+     *      field + 1 bytes -> off-by-one write 1 byte past data[].
+     *   2) `buffer_len` is NOT validated against the declared length: memcpy
+     *      copies `field + 1` bytes from the input buffer without checking
+     *      how many actually arrived -> OVER-READ of up to ~MAX bytes of
+     *      adjacent memory (leak), controlled by the TC's `length` field.
+     *
+     * The data[] array is used as a raw destination pointer in memcpy(): C does
+     * not enforce the array bound, so without these checks the attacker controls
+     * how much is read/written. (buffer_len is deliberately left unused.) */
+    (void)buffer_len;
     uint16_t field = spp_be16_to_host(pkt->header.length);
-    if ((uint32_t)field + 1 > SPP_MAX_PAYLOAD_CHUNK)
+    if (field > SPP_MAX_PAYLOAD_CHUNK)
         return SPP_ERROR_PAYLOAD_LEN;
-
-    uint16_t total = SPP_PRIMARY_HEADER_LEN + field + 1;
-    if (buffer_len < total)
-        return SPP_ERROR_PACKET_LEN;
 
     memcpy(pkt->data, buffer + SPP_PRIMARY_HEADER_LEN, field + 1);
     return SPP_ERROR_NONE;

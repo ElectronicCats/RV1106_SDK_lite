@@ -1,9 +1,9 @@
 /*
- * CubeSat — cliente del RadioService (SX1262 ×2 en el MCU RISC-V, via /dev/rpmsg).
+ * CubeSat — RadioService client (SX1262 x2 on the RISC-V MCU, via /dev/rpmsg).
  *
- * La radio fisica la controla el firmware RT-Thread del MCU; esta herramienta
- * le manda comandos por IPC (rpmsg). El canal se liga en el arranque (rcS).
- * Ver docs/riscv-migration/{40-diseno-migracion,90-mcu-configuracion...}.md.
+ * The physical radio is controlled by the MCU's RT-Thread firmware; this tool
+ * sends it commands over IPC (rpmsg). The channel is bound at boot (rcS).
+ * See docs/riscv-migration/{40-diseno-migracion,90-mcu-configuracion...}.md.
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -25,7 +25,7 @@ struct rpmsg_endpoint_info {
 
 static uint32_t g_src;   /* unique per-process src, so we can find our endpoint */
 
-#define RADIO_ERR_NOT_INITED 0x10   /* la radio no esta configurada */
+#define RADIO_ERR_NOT_INITED 0x10   /* the radio is not configured */
 #define EVT_RX          0xE0
 #define EVT_RX_TIMEOUT  0xE1
 
@@ -51,7 +51,7 @@ static void usage(void)
 "                        sf=5..12    bw=125|250|500   cr=1..4 (1=4/5..4=4/8)\n"
 "                        power=-9..22  pre=preamble(sim)  crc=on|off  iq=std|inv\n"
 "                        sync=pub|priv|<hex16>\n"
-"                      Default: SF7 BW125 CR4/5 pre12 CRC on 20dBm sync privada\n"
+"                      Default: SF7 BW250 CR4/5 pre8 CRC on 20dBm sync privada\n"
 "                      IQ std (OCP 140mA, LDRO auto, ganancia RX boosted).\n"
 "                      Ej: init 915000000 sf=9 bw=250 crc=off iq=inv\n"
 "                      Compat: init 915000000 7 125 1 20 (posicional sf bw cr pwr)\n"
@@ -77,6 +77,32 @@ static void usage(void)
 "                      Ambos extremos deben usar la misma polaridad IQ.\n"
 "  pkts                Muestra RSSI y SNR del ultimo paquete recibido.\n"
 "  rssi                RSSI instantaneo (dBm).\n"
+"\n"
+"INYECCIÓN DE COMANDOS POR RPMsg (Equivalente a USB CDC de FlatSat):\n"
+"  tcsend <apid_hex> [payload_hex]   Inyecta un TC (telecomando) directamente\n"
+"                      al CommandService del MCU por rpmsg, saltÃ¡ndose la radio.\n"
+"                      apid_hex = APID de 2-3 dÃ­gitos hex (ej: 02 = reset, 07 = flash).\n"
+"                      payload_hex = opcional, bytes hex (ej: reset no necesita;\n"
+"                      thruster: 00 0A = thruster0 power 10).\n"
+"                      Ej: radio_test tcsend 02          # reset\n"
+"                      Ej: radio_test tcsend 04 000A      # thruster0=10\n"
+"                      Ej: radio_test tcsend 07           # flash\n"
+"  cmd_ping            Ping al CommandService (responde \"CMDS\" + version).\n"
+"  cmd_start <freq_hz> Inicia el CommandService (configura uplink).\n"
+"  cmd_stop            Detiene el CommandService.\n"
+"  cmd_status          Estado del CommandService: activo, thrusters, beacon, TC count.\n"
+"  cmd_config <freq> [sf] [bw] [cr]  Reconfigura uplink (freq en Hz, opcionales).\n"
+"  cmd_listen          Escucha eventos EVT_TC_RX del CommandService en tiempo\n"
+"                      real (uplink recibido). Ctrl+C para salir.\n"
+"  cmd_watch           Vista unificada: cada TC recibido + su efecto/respuesta\n"
+"                      (downlink o cambio de estado). Ctrl+C para salir.\n"
+"  tlm                 Monitor del downlink (TM/sync/idle/beacon/respuestas) via\n"
+"                      IPC: imprime cada frame SPP que baja el MCU. Ctrl+C salir.\n"
+"\n"
+"PRUEBA BROADCAST CON FRECUENCIA ARBITRARIA:\n"
+"  tcbroad <freq_hz> [txt]  EnvÃ­a TC_BROADCAST_MSG (APID 0x06) con frecuencia\n"
+"                      y texto dados (bandas ISM limitadas a 430-960 MHz por el\n"
+"                      firmware del MCU). Ej: radio_test tcbroad 868000000 \"test\"\n"
 "\n"
 "COMANDOS DE PAQUETES (LoRa, requieren init previo):\n"
 "  tx <texto>          Transmite un paquete LoRa con <texto>. Bloquea hasta\n"
@@ -173,6 +199,76 @@ static int open_ept(void)
     return -1;
 }
 
+/* Open an endpoint to a named MCU rpmsg service (e.g. "rpmsg-command" @ 0x4008,
+ * "rpmsg-telemetry" @ 0x4007). Scans rpmsg_ctrl*, creates the endpoint with a
+ * unique per-process src, and waits for /dev/rpmsgN to appear. */
+/* Like open_named_ept() but with an explicit src address, so a single process
+ * can hold several endpoints at once (each needs a UNIQUE src for rpmsg routing
+ * — e.g. cmd_watch opens command + telemetry together). */
+static int open_named_ept_src(const char *chan, uint32_t dst, uint32_t src)
+{
+    struct rpmsg_endpoint_info ept = { .name = "cli", .dst = dst };
+    int cfd, t, n, ctrl;
+    char cp[64];
+
+    for (ctrl = 0; ctrl < 8; ctrl++) {
+        snprintf(cp, sizeof(cp), "/sys/class/rpmsg/rpmsg_ctrl%d/device", ctrl);
+        char target[256];
+        ssize_t r = readlink(cp, target, sizeof(target) - 1);
+        if (r > 0) {
+            target[r] = '\0';
+            if (strstr(target, chan))
+                break;
+        }
+    }
+    if (ctrl >= 8) {
+        fprintf(stderr, "error: no encuentro el canal %s\n", chan);
+        return -1;
+    }
+    ept.src = src;
+
+    snprintf(cp, sizeof(cp), "/dev/rpmsg_ctrl%d", ctrl);
+    cfd = open(cp, O_RDWR);
+    if (cfd < 0) { perror(cp); return -1; }
+    if (ioctl(cfd, RPMSG_CREATE_EPT_IOCTL, &ept) < 0) { perror("create ept"); close(cfd); return -1; }
+    close(cfd);
+
+    for (t = 0; t < 50; t++) {
+        for (n = 0; n < 32; n++) {
+            if (ept_src(n) == (long)src) {
+                char np[64];
+                int fd;
+                snprintf(np, sizeof(np), "/dev/rpmsg%d", n);
+                fd = open(np, O_RDWR);
+                if (fd >= 0)
+                    return fd;
+            }
+        }
+        usleep(20000);
+    }
+    fprintf(stderr, "error: no aparecio el endpoint /dev/rpmsgN para %s.\n", chan);
+    return -1;
+}
+
+/* Open an endpoint to a named MCU rpmsg service with the default per-process src. */
+static int open_named_ept(const char *chan, uint32_t dst)
+{
+    g_src = 0x6000 + (uint32_t)(getpid() & 0x0FFF);
+    return open_named_ept_src(chan, dst, g_src);
+}
+
+/* Endpoint to the CommandService (0x4008): direct TC injection + TC events. */
+static int open_command_ept(void)
+{
+    return open_named_ept("rpmsg-command", 0x4008);
+}
+
+/* Endpoint to the TelemetryService (0x4007): downlink TM monitor (CDC-like). */
+static int open_telemetry_ept(void)
+{
+    return open_named_ept("rpmsg-telemetry", 0x4007);
+}
+
 /* Tear down our endpoint so /dev/rpmsgN nodes don't leak across invocations. */
 static void close_ept(int fd)
 {
@@ -217,6 +313,45 @@ static const char *radio_err_str(uint8_t e)
     case 0x10: return "NOT_INITED (corre 'init' primero)";
     default:   return "ERROR (desconocido)";
     }
+}
+
+/* Human-readable name for an uplink TC APID (see mission.h). */
+static const char *tc_apid_name(uint16_t apid)
+{
+    switch (apid) {
+    case 0x01: return "PING";
+    case 0x02: return "RESET";
+    case 0x03: return "SEND_FW (pide version)";
+    case 0x04: return "SET_THRUSTER";
+    case 0x05: return "SET_BEACON_RATE";
+    case 0x06: return "BROADCAST_MSG";
+    case 0x07: return "FLASH (dump)";
+    default:   return "APID desconocido";
+    }
+}
+
+/* Human-readable name for a downlink TM APID (see mission.h). */
+static const char *tm_apid_name(uint16_t apid)
+{
+    switch (apid) {
+    case 0x01: return "PING/beacon";
+    case 0x03: return "VERSION";
+    case 0x06: return "BROADCAST";
+    case 0x07: return "FLASH chunk";
+    case 0x08: return "TM periodica";
+    case 0x09: return "ERROR Unknown APID";
+    default:   return "TM";
+    }
+}
+
+/* Print the printable ASCII of a byte range as data="..." (non-printables as '.'). */
+static void print_ascii_field(const uint8_t *b, int from, int to)
+{
+    int i;
+    printf(" data=\"");
+    for (i = from; i < to; i++)
+        putchar((b[i] >= 0x20 && b[i] < 0x7f) ? b[i] : '.');
+    printf("\"");
 }
 
 /* Wait for and print an EVT_RX or EVT_RX_TIMEOUT. Returns 0 for EVT_RX
@@ -327,7 +462,7 @@ int main(int argc, char **argv)
          * Bare numbers after freq are still accepted positionally as sf bw cr power.
          * Unspecified params take the built-in defaults. Orchestrates
          * INIT (0x05) + SET_PKT_PARAMS (0x11, sticky pre/crc/iq) + SET_SYNC (0x14). */
-        int sf = 7, bw = 125, cr = 1, pwr = 20, pre = 12, crc = 1, iq = 0;
+        int sf = 7, bw = 250, cr = 1, pwr = 20, pre = 8, crc = 1, iq = 0;
         int sync_set = 0, pos = 0, i;
         uint16_t sw = 0x1424;
         uint8_t q[16];
@@ -456,9 +591,9 @@ int main(int argc, char **argv)
         uint16_t sw;
         if (need_arg(argc >= 3, "pub|priv|hex16")) return 2;
         if (!strcmp(argv[2], "pub") || !strcmp(argv[2], "publica"))
-            sw = 0x3444;                               /* LoRaWAN / red publica */
+            sw = 0x3444;                               /* LoRaWAN / public network */
         else if (!strcmp(argv[2], "priv") || !strcmp(argv[2], "privada"))
-            sw = 0x1424;                               /* default de fabrica */
+            sw = 0x1424;                               /* factory default */
         else
             sw = (uint16_t)strtoul(argv[2], NULL, 16);
         req[0] = 0x14; req[2] = (uint8_t)(sw >> 8); req[3] = (uint8_t)sw; len = 4;
@@ -471,6 +606,315 @@ int main(int argc, char **argv)
         req[0] = 0x0D; req[2] = (uint8_t)plen;
         memcpy(&req[3], argv[2], plen);
         len = 3 + plen; tmo = 6000;   /* handler blocks until TX_DONE */
+    }
+    else if (!strcmp(cmd, "tcsend")) {
+        /* Direct TC injection via rpmsg to CommandService, bypassing RF.
+         * Usage: radio_test tcsend <apid_hex> [payload_hex...]
+         * Builds a CCSDS SPP packet and sends it via CMD_CMD_TC_SEND (0x10)
+         * to the command_service rpmsg endpoint (0x4008).
+         * Payload is raw hex bytes (e.g. "00 0A" for thruster0 power 10). */
+        uint16_t apid;
+        uint8_t  pkt[300];
+        int      plen = 0, i;
+
+        if (need_arg(argc >= 3, "apid_hex")) return 2;
+        apid = (uint16_t)(strtoul(argv[2], NULL, 16) & 0x07FF);
+
+        /* Parse optional hex payload args */
+        for (i = 3; i < argc && plen < 250; i++) {
+            pkt[plen++] = (uint8_t)strtoul(argv[i], NULL, 16);
+        }
+
+        /* Build SPP primary header: type=TC, seq_flags=unsegmented, seq=0 */
+        uint16_t ident = (0x0 << 13) | (0x1 << 12) | (0x0 << 11) | apid;
+        uint16_t seq   = (0x3 << 14) | 0x0000;
+        uint16_t dlen  = (uint16_t)((plen > 0 ? plen : 1) - 1);
+
+        uint8_t frame[260];
+        int foff = 0;
+        frame[foff++] = 0x10;  /* CMD_CMD_TC_SEND */
+        /* SPP header (6 bytes big-endian) */
+        frame[foff++] = (uint8_t)(ident >> 8);
+        frame[foff++] = (uint8_t)ident;
+        frame[foff++] = (uint8_t)(seq >> 8);
+        frame[foff++] = (uint8_t)seq;
+        frame[foff++] = (uint8_t)(dlen >> 8);
+        frame[foff++] = (uint8_t)dlen;
+        /* payload */
+        if (plen > 0) { memcpy(frame + foff, pkt, plen); foff += plen; }
+        else { frame[foff++] = 0x00; }  /* pad byte */
+
+        fd = open_command_ept();
+        if (fd < 0) return 1;
+
+        n = xfer(fd, frame, foff, rsp, sizeof(rsp), 3000);
+        close_ept(fd);
+
+        if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        printf("tcsend: APID 0x%03X %s", apid, radio_err_str(rsp[1]));
+        if (rsp[1] == 0) printf(" (TC inyectado: %d bytes payload hex)", plen);
+        printf("\n");
+        return rsp[1] ? 1 : 0;
+    }
+    else if (!strcmp(cmd, "tcbroad")) {
+        /* Send TC_BROADCAST_MSG (APID 0x06) with given frequency and text.
+         * Frequency in Hz (uint32_t, converted to MHz uint16_t).
+         * Text appended as data after 2-byte freq.
+         * Direct rpmsg injection. */
+        uint16_t freq_mhz;
+        const char *text;
+        if (need_arg(argc >= 4, "freq_hz> <texto")) return 2;
+        freq_mhz = (uint16_t)(strtoul(argv[2], NULL, 10) / 1000000);
+        text = argv[3];
+        int tlen = (int)strlen(text);
+        if (tlen > 248) tlen = 248;
+
+        /* Build payload: freq(2 bytes) + text */
+        uint8_t pay[300];
+        int plen = 0;
+        pay[plen++] = (uint8_t)(freq_mhz >> 8);
+        pay[plen++] = (uint8_t)freq_mhz;
+        memcpy(pay + plen, text, tlen);
+        plen += tlen;
+
+        /* Build SPP TC frame */
+        uint16_t ident = (0x0 << 13) | (0x1 << 12) | (0x0 << 11) | 0x06; /* TC BROADCAST */
+        uint16_t seq   = (0x3 << 14) | 0x0000;
+        uint16_t dlen  = (uint16_t)(plen - 1);
+
+        uint8_t frame[350];
+        int off = 0;
+        frame[off++] = 0x10;  /* CMD_CMD_TC_SEND */
+        frame[off++] = (uint8_t)(ident >> 8);
+        frame[off++] = (uint8_t)ident;
+        frame[off++] = (uint8_t)(seq >> 8);
+        frame[off++] = (uint8_t)seq;
+        frame[off++] = (uint8_t)(dlen >> 8);
+        frame[off++] = (uint8_t)dlen;
+        memcpy(frame + off, pay, plen);
+        off += plen;
+
+        fd = open_command_ept();
+        if (fd < 0) return 1;
+
+        n = xfer(fd, frame, off, rsp, sizeof(rsp), 3000);
+        close_ept(fd);
+
+        if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        printf("tcbroad: freq=%u MHz txt=\"%s\" %s\n",
+               freq_mhz, text, radio_err_str(rsp[1]));
+        return rsp[1] ? 1 : 0;
+    }
+    else if (!strcmp(cmd, "cmd_ping")) {
+        uint8_t req[4] = {0x01};
+        fd = open_command_ept();
+        if (fd < 0) return 1;
+        n = xfer(fd, req, 1, rsp, sizeof(rsp), 3000);
+        close_ept(fd);
+        if (n < 7) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        printf("cmd_ping: id=\"%c%c%c%c\" version=%d\n",
+               rsp[2], rsp[3], rsp[4], rsp[5], rsp[6]);
+        return rsp[1] ? 1 : 0;
+    }
+    else if (!strcmp(cmd, "cmd_start")) {
+        uint32_t freq;
+        if (need_arg(argc >= 3, "freq_hz")) return 2;
+        freq = (uint32_t)strtoul(argv[2], NULL, 10);
+        uint8_t req[6] = {0x02, 0,
+                          (uint8_t)(freq >> 24), (uint8_t)(freq >> 16),
+                          (uint8_t)(freq >> 8),  (uint8_t)freq};
+        fd = open_command_ept();
+        if (fd < 0) return 1;
+        n = xfer(fd, req, 6, rsp, sizeof(rsp), 3000);
+        close_ept(fd);
+        if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        printf("cmd_start: %s\n", radio_err_str(rsp[1]));
+        return rsp[1] ? 1 : 0;
+    }
+    else if (!strcmp(cmd, "cmd_stop")) {
+        uint8_t req[2] = {0x03, 0};
+        fd = open_command_ept();
+        if (fd < 0) return 1;
+        n = xfer(fd, req, 1, rsp, sizeof(rsp), 3000);
+        close_ept(fd);
+        if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        printf("cmd_stop: %s\n", radio_err_str(rsp[1]));
+        return rsp[1] ? 1 : 0;
+    }
+    else if (!strcmp(cmd, "cmd_status")) {
+        uint8_t req[2] = {0x04, 0};
+        fd = open_command_ept();
+        if (fd < 0) return 1;
+        n = xfer(fd, req, 1, rsp, sizeof(rsp), 3000);
+        close_ept(fd);
+        if (n < 11) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        printf("cmd_status: active=%d thruster=[%d,%d] beacon=%dms tx_count=%u\n",
+               rsp[2], rsp[3], rsp[4],
+               ((uint16_t)rsp[5] << 8) | rsp[6],
+               ((uint32_t)rsp[7] << 24) | ((uint32_t)rsp[8] << 16) |
+               ((uint32_t)rsp[9] << 8)  | rsp[10]);
+        return rsp[1] ? 1 : 0;
+    }
+    else if (!strcmp(cmd, "cmd_config")) {
+        uint32_t freq;
+        uint8_t sf, cr;
+        uint32_t bw;
+        if (need_arg(argc >= 4, "freq_hz [sf] [bw] [cr]")) return 2;
+        freq = (uint32_t)strtoul(argv[2], NULL, 10);
+        sf = (argc > 3) ? (uint8_t)strtoul(argv[3], NULL, 10) : 7;
+        bw = (argc > 4) ? (uint32_t)strtoul(argv[4], NULL, 10) : 250000;
+        cr = (argc > 5) ? (uint8_t)strtoul(argv[5], NULL, 10) : 1;
+        uint8_t req[11] = {0x05, 0,
+                           (uint8_t)(freq >> 24), (uint8_t)(freq >> 16),
+                           (uint8_t)(freq >> 8),  (uint8_t)freq,
+                           sf,
+                           (uint8_t)(bw >> 8), (uint8_t)bw,
+                           cr};
+        fd = open_command_ept();
+        if (fd < 0) return 1;
+        n = xfer(fd, req, 10, rsp, sizeof(rsp), 3000);
+        close_ept(fd);
+        if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        printf("cmd_config: freq=%u sf=%u bw=%u cr=%u %s\n",
+               freq, sf, bw, cr, radio_err_str(rsp[1]));
+        return rsp[1] ? 1 : 0;
+    }
+    else if (!strcmp(cmd, "cmd_listen")) {
+        /* Listen for EVT_TC_RX events from CommandService (like FlatSat CDC).
+         * Opens the command endpoint and polls in a loop, printing each event. */
+        fd = open_command_ept();
+        if (fd < 0) return 1;
+
+        printf("cmd_listen: escuchando eventos EVT_TC_RX... (Ctrl+C para salir)\n");
+        /* Send a PING first so the MCU registers our host address for event delivery */
+        {
+            uint8_t ping_req[2] = {0x01, 0};
+            (void)xfer(fd, ping_req, 2, rsp, sizeof(rsp), 2000);
+        }
+        for (;;) {
+            n = xfer(fd, NULL, 0, rsp, sizeof(rsp), 2000);
+            if (n > 0) {
+                if (n >= 7 && rsp[0] == 0xE3) {
+                    uint32_t tc_cnt = ((uint32_t)rsp[1] << 24) |
+                                      ((uint32_t)rsp[2] << 16) |
+                                      ((uint32_t)rsp[3] << 8)  | rsp[4];
+                    uint16_t apid = ((uint16_t)rsp[5] << 8) | rsp[6];
+                    printf("[EVT_TC_RX] TC #%u APID=0x%03X (%u bytes)\n",
+                           tc_cnt, apid, n > 7 ? n - 7 : 0);
+                    if (n > 7) {
+                        printf("  Payload: ");
+                        for (int i = 7; i < n; i++)
+                            printf("%02X ", rsp[i]);
+                        printf("\n");
+                    }
+                } else if (rsp[0] == 0xE0 || rsp[0] == 0xE1) {
+                    printf("[EVT_RADIO] type=0x%02X len=%d\n", rsp[0], n);
+                } else {
+                    printf("[EVT_UNK] type=0x%02X len=%d\n", rsp[0], n);
+                }
+                fflush(stdout);
+            }
+        }
+        close_ept(fd);
+        return 0;
+    }
+    else if (!strcmp(cmd, "cmd_watch")) {
+        /* Unified view: each received TC (EVT_TC_RX @0x4008) together with its
+         * effect/response. ALSO opens the downlink monitor (@0x4007) to show
+         * the response that comes down (PING ack, version, flash, broadcast,
+         * error). For TCs that send NOTHING down (thruster/beacon), decode the
+         * direct effect from the TC bytes. This is the host's "TC log". */
+        int cfd = open_named_ept_src("rpmsg-command",   0x4008,
+                                     0x6000 + (uint32_t)(getpid() & 0x0FFF));
+        if (cfd < 0) return 1;
+        int tfd = open_named_ept_src("rpmsg-telemetry", 0x4007,
+                                     0x7000 + (uint32_t)(getpid() & 0x0FFF));
+        if (tfd < 0) { close_ept(cfd); return 1; }
+
+        printf("cmd_watch: TC recibidos + efecto/respuesta (Ctrl+C para salir)\n");
+        { uint8_t p[2] = {0x01, 0};    (void)xfer(cfd, p, 2, rsp, sizeof(rsp), 2000); }
+        { uint8_t m[2] = {0x10, 0x01}; (void)xfer(tfd, m, 2, rsp, sizeof(rsp), 2000); }
+
+        struct pollfd pfds[2] = { { cfd, POLLIN, 0 }, { tfd, POLLIN, 0 } };
+        for (;;) {
+            if (poll(pfds, 2, 2000) <= 0) continue;
+
+            if (pfds[0].revents & POLLIN) {          /* --- TC received --- */
+                n = read(cfd, rsp, sizeof(rsp));
+                if (n >= 7 && rsp[0] == 0xE3) {
+                    uint32_t cnt  = ((uint32_t)rsp[1] << 24) | ((uint32_t)rsp[2] << 16) |
+                                    ((uint32_t)rsp[3] << 8)  |  rsp[4];
+                    uint16_t apid = ((uint16_t)rsp[5] << 8)  |  rsp[6];
+                    printf("\n[TC #%u]  APID=0x%03X  %s\n", cnt, apid, tc_apid_name(apid));
+                    if (n > 7) {
+                        printf("   raw:");
+                        for (int i = 7; i < n; i++) printf(" %02X", rsp[i]);
+                        printf("\n");
+                    }
+                    /* Effect of TCs that generate no downlink (read from the TC). */
+                    if (apid == 0x04 && n >= 15)
+                        printf("   -> efecto: thruster%u potencia=%u (sin downlink; ver cmd_status)\n",
+                               rsp[13], rsp[14]);
+                    else if (apid == 0x05 && n >= 14)
+                        printf("   -> efecto: beacon_rate=%us %s(sin downlink)\n",
+                               rsp[13], rsp[13] > 10 ? "[RECHAZADO >10s] " : "");
+                    else if (apid == 0x02)
+                        printf("   -> efecto: RESET del satelite (sin downlink)\n");
+                    fflush(stdout);
+                }
+            }
+
+            if (pfds[1].revents & POLLIN) {          /* --- downlink response --- */
+                n = read(tfd, rsp, sizeof(rsp));
+                if (n == 2 && rsp[0] == 0x10) continue;   /* MONITOR echo */
+                if (n >= 6) {
+                    uint16_t apid = (((uint16_t)rsp[0] << 8) | rsp[1]) & 0x07FF;
+                    printf("   <- respuesta: TM APID=0x%03X %s", apid, tm_apid_name(apid));
+                    if (n > 6) print_ascii_field(rsp, 6, n);
+                    printf("\n");
+                    fflush(stdout);
+                }
+            }
+        }
+        close_ept(cfd);
+        close_ept(tfd);
+        return 0;
+    }
+    else if (!strcmp(cmd, "tlm")) {
+        /* Downlink monitor (TM/sync/idle/beacon/TC responses) via IPC.
+         * Replacement for the host's "serial monitor": opens the TelemetryService
+         * (0x4007), enables the monitor and prints every SPP frame the MCU
+         * transmits on the downlink. Equivalent to seeing the downlink without an SDR. */
+        fd = open_telemetry_ept();
+        if (fd < 0) return 1;
+        printf("tlm: monitor de downlink habilitado... (Ctrl+C para salir)\n");
+        {
+            uint8_t mon_req[2] = {0x10, 0x01};   /* TELEM_CMD_MONITOR enable */
+            (void)xfer(fd, mon_req, 2, rsp, sizeof(rsp), 2000);
+        }
+        for (;;) {
+            n = rx_msg(fd, rsp, sizeof(rsp), 2000);
+            if (n <= 0) continue;
+            if (n == 2 && rsp[0] == 0x10) continue;   /* MONITOR command echo */
+            if (n >= 6) {
+                uint16_t ident = ((uint16_t)rsp[0] << 8) | rsp[1];
+                uint16_t apid  = ident & 0x07FF;
+                int      type  = (ident >> 12) & 0x01;
+                uint16_t dlen  = (uint16_t)((((uint16_t)rsp[4] << 8) | rsp[5]) + 1);
+                printf("[TM] APID=0x%03X %s frame=%dB data=%dB\n",
+                       apid, type ? "TC" : "TM", n, dlen);
+                printf("  ");
+                for (int i = 0; i < n; i++) printf("%02X ", rsp[i]);
+                printf("\n");
+            } else {
+                printf("[TM?] len=%d: ", n);
+                for (int i = 0; i < n; i++) printf("%02X ", rsp[i]);
+                printf("\n");
+            }
+            fflush(stdout);
+        }
+        close_ept(fd);
+        return 0;
     }
     else if (!strcmp(cmd, "ccsds")) {
         /* Build and transmit a CCSDS SPP packet (6-byte header + payload).
@@ -630,7 +1074,7 @@ int main(int argc, char **argv)
             printf(", freq=%lu Hz, SF=%d, BW=%d kHz, CR=%d, power=%d dBm, CRC=off",
                    (unsigned long)f, req[6], ((int)req[7]<<8)|req[8], req[9], (int8_t)req[10]);
         else
-            printf(", freq=%lu Hz, SF=7, BW=125 kHz, CR=4/5, preamble=12, "
+            printf(", freq=%lu Hz, SF=7, BW=250 kHz, CR=4/5, preamble=8, "
                    "power=20 dBm, sync=privada 0x1424, CRC=on (defaults)",
                    (unsigned long)f);
     }
