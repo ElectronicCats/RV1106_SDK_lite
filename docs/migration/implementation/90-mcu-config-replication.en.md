@@ -287,6 +287,12 @@ contention of two processes over `/dev/rpmsg0`).
 ---
 
 **SX1262 app improvements:**
+- **SPI write idle-wait**: `sx_spi_xfer` (`sx1262_port_rtt.c`) waits for the controller to go
+  idle (`HAL_SPI_QueryBusState`) between `HAL_SPI_PioTransfer` and `HAL_SPI_Stop`, the same way
+  the reference `drv_spi.c rockchip_spi_wait_idle` does. This is required because `PioTransfer`
+  returns as soon as the last byte is in the TX FIFO while `Stop` disables the controller
+  immediately — the idle-wait is what lets the whole write reach the wire before the controller
+  stops (otherwise the tail byte can be lost). Confirmed on hardware (loopback CRC ok).
 - **RSSI/SNR corrected**: `sx1262_get_packet_status` read RSSI/SNR with a one-byte
   offset. Handled in the shared core `sx1262_cmd.c`.
 - **Continuous RX with software deadline**: `RX_START` with `t>0` uses a software

@@ -27,8 +27,13 @@ them (e.g. `radio_test cmd_listen` / `cmd_watch`).
 ## Transport shape
 
 - rpmsg-lite payload is **≤ 496 B**; larger messages are chunked.
-- Measured on this SoC: **B2A** (MCU→A7) works directly, **A2B** (A7→MCU) is not readable by
-  the MCU by interrupt, so the MCU **polls the vrings** from its thread. Details:
+- Measured on this SoC: **B2A** (MCU→A7) works directly. For **A2B** (A7→MCU) the mailbox
+  status/payload registers read back as 0 on the MCU, but the mailbox **interrupt (vector 2)
+  does fire** — so RX is **interrupt-driven**: the ISR acks the doorbell and releases a
+  semaphore, and the drain thread (the sole owner of the vrings) wakes and services them. A
+  2 ms timeout remains only as a fallback for the periodic service work, not as the RX path.
+  (Empirically confirmed: the mailbox IRQ fires on every A7 kick; everything else on the MCU
+  — SPI/I²C/GPIO — is polled.) Details:
   [`../migration/reference/20-luckfox-ipc.md`](../migration/reference/20-luckfox-ipc.md) and
   [`../migration/implementation/70-mailbox-loopback-test.md`](../migration/implementation/70-mailbox-loopback-test.md).
 - On Linux the endpoints appear under `/dev/rpmsg*`; `radio_test` opens destinations 0x4005,

@@ -88,6 +88,20 @@ static volatile int32_t s_kicked   = 0;
 /* Latest int_mux status, exported for diagnostics. */
 volatile unsigned int g_rv1106_intmux_dbg = 0;
 
+/*
+ * Interrupt-driven RX wake. The mailbox ISR releases s_rx_sem so the ping_echo
+ * thread drains the vrings IMMEDIATELY on an A7 kick instead of waiting out its
+ * 2 ms poll interval (RX latency drops from up to 2 ms to ~microseconds).
+ *
+ * env_isr() is STILL only ever called from that thread (see rpmsg_rv1106_rx_poll),
+ * NOT from the ISR: the service RX callbacks (command_rx -> radio TX / reset /
+ * mdelay, etc.) do blocking work that is illegal in ISR context, and calling
+ * env_isr from both the ISR and the thread previously raced and corrupted the
+ * link. The ISR only ACKs + wakes; the thread stays the sole vq owner.
+ */
+static struct rt_semaphore s_rx_sem;
+static volatile int32_t    s_rx_sem_ready = 0;
+
 /* Service both virtqueues for the established link (doorbell-less RX).
  * Stage marker at 0xff6ff848 (0xE1..0xE4) bisects any freeze to the exact
  * step; 0xff6ff84c mirrors the last int_mux status0 read. */
@@ -132,6 +146,24 @@ void rpmsg_rv1106_rx_poll(void)
 }
 
 /*
+ * Block the drain thread until the mailbox ISR signals an A7 kick, or until `ms`
+ * elapses (the timeout keeps the periodic service work — radio DIO1 poll, B2A
+ * reply/event flush — running on its ~2ms cadence even when the link is idle).
+ * Extra kick tokens from a burst are coalesced so one wake services the whole
+ * batch (rx_poll drains all pending buffers) instead of spinning.
+ */
+void rpmsg_rv1106_rx_wait(uint32_t ms)
+{
+    if (s_rx_sem_ready == 0)
+    {
+        rt_thread_mdelay(ms);      /* pre-init fallback (should not happen) */
+        return;
+    }
+    (void)rt_sem_take(&s_rx_sem, rt_tick_from_millisecond(ms));
+    while (rt_sem_take(&s_rx_sem, 0) == RT_EOK) { }   /* coalesce burst */
+}
+
+/*
  * Mailbox BB interrupt: doorbell-ACK ONLY.
  *
  * The SCR1 cannot READ A2B_STATUS (returns 0), so HAL_MBOX_IrqHandler can never
@@ -139,11 +171,14 @@ void rpmsg_rv1106_rx_poll(void)
  * race the RX poll thread (that race corrupted the link after ~22 pingpongs).
  * Division of labor:
  *   ISR   = blind write-1-clear of ALL A2B channels (the write DOES land even
- *           though reads return 0) + latch s_kicked. Sub-microsecond ack, so
- *           the Linux mailbox TX path never sees the channel busy no matter
- *           how fast it kicks.
- *   POLL  = (ping_echo thread) drains both virtqueues; the only place that
- *           calls env_isr(). No concurrency on the vq structures.
+ *           though reads return 0) + latch s_kicked + RELEASE s_rx_sem to wake
+ *           the drain thread immediately. Sub-microsecond ack, so the Linux
+ *           mailbox TX path never sees the channel busy no matter how fast it
+ *           kicks. It does NOT touch the virtqueues.
+ *   THREAD = (ping_echo) drains both virtqueues; the only place that calls
+ *           env_isr(). It now blocks on s_rx_sem and is woken by the ISR on each
+ *           kick (RX latency ~microseconds), falling back to a 2ms timeout for
+ *           the periodic service work. No concurrency on the vq structures.
  */
 static void rpmsg_mbox_isr(int irqn, void *param)
 {
@@ -151,6 +186,8 @@ static void rpmsg_mbox_isr(int irqn, void *param)
     (void)param;
     rl_pMBox->A2B_STATUS = 0xFU;   /* W1C all four channels */
     s_kicked = 1;
+    if (s_rx_sem_ready)            /* wake the drain thread now, don't wait 2ms */
+        rt_sem_release(&s_rx_sem);
 }
 
 /* RX callback: a mailbox message from the A7 carries link_id in CMD, magic in DATA */
@@ -306,6 +343,10 @@ int32_t platform_init(void)
     {
         return -1;
     }
+    /* RX-wake semaphore: mailbox ISR releases it, the ping_echo drain thread
+     * waits on it (rpmsg_rv1106_rx_wait). Init before any kick can arrive. */
+    rt_sem_init(&s_rx_sem, "rpmsgrx", 0, RT_IPC_FLAG_FIFO);
+    s_rx_sem_ready = 1;
     return 0;
 }
 

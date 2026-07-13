@@ -61,6 +61,7 @@ extern uint32_t __linux_share_rpmsg_start__[];
 #define PING_SHMEM_BASE   ((void *)&__linux_share_rpmsg_start__)
 
 extern void rpmsg_rv1106_rx_poll(void);
+extern void rpmsg_rv1106_rx_wait(uint32_t ms);   /* block until an A7 kick or `ms` */
 
 static struct rpmsg_lite_instance *s_inst;
 static struct rpmsg_lite_endpoint *s_ept;
@@ -132,11 +133,13 @@ static void ping_echo_thread(void *arg)
         (void)command_service_init_default();
     }
 
-    /* Steady-state RX poll: drain the vrings every 2 ms forever; flush any
-     * deferred service replies outside the drain. */
+    /* Steady-state: drain the vrings whenever the A7 kicks the mailbox (the ISR
+     * wakes us via rpmsg_rv1106_rx_wait), with a 2ms timeout that also runs the
+     * periodic service work (radio DIO1 poll, deferred B2A reply/event flush). */
     while (1)
     {
         extern void radio_service_poll(void);
+        extern void sensor_service_poll(void);
         extern void telemetry_service_poll(void);
         extern void telemetry_service_poll_flush(void);
         extern void command_service_poll_flush(void);
@@ -150,7 +153,11 @@ static void ping_echo_thread(void *arg)
         sensor_service_poll();
         command_service_telemetry_worker();
         telemetry_service_poll();
-        rt_thread_mdelay(2);
+        /* Interrupt-driven RX: wake immediately when the A7 kicks the mailbox
+         * (rpmsg_mbox_isr releases the RX semaphore), else fall through after
+         * 2ms to keep the periodic service work above on cadence. Replaces the
+         * old rt_thread_mdelay(2) poll so RX latency is ~us, not up to 2ms. */
+        rpmsg_rv1106_rx_wait(2);
     }
 }
 

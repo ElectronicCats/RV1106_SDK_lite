@@ -90,6 +90,19 @@ static int sx_spi_xfer(struct sx1262_device *dev, const void *tx, void *rx, uint
         return -1;
 
     ret = HAL_SPI_PioTransfer(dev->spi);
+
+    /* Wait for the controller to finish shifting out before disabling it.
+     * HAL_SPI_PioTransfer returns once the last byte is loaded into the TX
+     * FIFO, NOT when it has left the wire; HAL_SPI_Stop disables the controller
+     * immediately, so without this the tail byte(s) of a write can be truncated.
+     * Mirrors the reference drv_spi.c rockchip_spi_wait_idle(). (RX-only
+     * transfers are already drained by PioTransfer, so this returns at once.) */
+    {
+        rt_tick_t timeout = rt_tick_get() + rt_tick_from_millisecond(10);
+        while (HAL_SPI_QueryBusState(dev->spi) != HAL_OK && timeout > rt_tick_get())
+            ;
+    }
+
     /* PioTransfer leaves the controller ENABLED; the Rockchip SPI must be
      * disabled before the next Configure() or the following transfer wedges
      * the state machine (frozen poll thread on the 2nd SPI op). Chip-select

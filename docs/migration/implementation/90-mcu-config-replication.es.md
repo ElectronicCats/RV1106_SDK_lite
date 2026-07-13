@@ -287,6 +287,13 @@ contención de dos procesos sobre `/dev/rpmsg0`).
 ---
 
 **Mejoras de la app SX1262:**
+- **Espera de idle en el write SPI**: `sx_spi_xfer` (`sx1262_port_rtt.c`) espera a que el
+  controlador quede idle (`HAL_SPI_QueryBusState`) entre `HAL_SPI_PioTransfer` y `HAL_SPI_Stop`,
+  igual que el `drv_spi.c rockchip_spi_wait_idle` de referencia. Es necesario porque `PioTransfer`
+  retorna en cuanto el último byte está en el FIFO de TX mientras `Stop` deshabilita el
+  controlador de inmediato — la espera de idle es lo que permite que todo el write llegue al
+  cable antes de detener el controlador (si no, el último byte se pierde). Confirmado en
+  hardware (loopback CRC ok).
 - **RSSI/SNR corregidos**: `sx1262_get_packet_status` leía RSSI/SNR con un desfase de
   un byte. Tratado en el core compartido `sx1262_cmd.c`.
 - **RX continuo con deadline por software**: `RX_START` con `t>0` usa un deadline por

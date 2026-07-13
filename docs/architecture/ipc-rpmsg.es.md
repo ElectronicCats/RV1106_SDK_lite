@@ -27,8 +27,13 @@ Linux hace `poll()` por ellos (p. ej. `radio_test cmd_listen` / `cmd_watch`).
 ## Forma del transporte
 
 - El payload rpmsg-lite es **≤ 496 B**; los mensajes mayores se fragmentan.
-- Medido en este SoC: **B2A** (MCU→A7) funciona directo, **A2B** (A7→MCU) el MCU no lo puede
-  leer por interrupción, así que el MCU **sondea los vrings** desde su hilo. Detalles:
+- Medido en este SoC: **B2A** (MCU→A7) funciona directo. Para **A2B** (A7→MCU) los registros
+  de status/payload del mailbox leen 0 en el MCU, pero la **interrupción del mailbox (vector 2)
+  sí dispara** — así que el RX es **interrupt-driven**: la ISR hace ack del doorbell y libera un
+  semáforo, y el hilo de drenado (único dueño de los vrings) se despierta y los atiende. Un
+  timeout de 2 ms queda solo como fallback para el trabajo periódico de servicios, no como la
+  ruta de RX. (Confirmado empíricamente: la IRQ del mailbox dispara en cada kick del A7; todo lo
+  demás en el MCU —SPI/I²C/GPIO— es polled.) Detalles:
   [`../migration/reference/20-luckfox-ipc.md`](../migration/reference/20-luckfox-ipc.md) y
   [`../migration/implementation/70-mailbox-loopback-test.md`](../migration/implementation/70-mailbox-loopback-test.md).
 - En Linux los endpoints aparecen bajo `/dev/rpmsg*`; `radio_test` abre los destinos 0x4005,
