@@ -1,6 +1,6 @@
 # CubeSat — userspace client for the MCU RadioService (SX1262 over rpmsg).
 # The radio hardware is owned by the RISC-V MCU (RT-Thread); this tool talks
-# to it through /dev/rpmsg (see docs/riscv-migration/40-diseno-migracion.md).
+# to it through /dev/rpmsg (see docs/migration/design/40-migration-design.md).
 CC      ?= gcc
 CFLAGS  ?= -Os -Wall
 LDFLAGS ?= -static

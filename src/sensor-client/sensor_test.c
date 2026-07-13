@@ -3,7 +3,7 @@
  *
  * Los sensores I2C0 los posee el firmware RT-Thread del MCU; esta herramienta
  * los consulta por IPC (rpmsg). El canal "rpmsg-sensor" se liga en el arranque
- * (rcS). Ver docs/riscv-migration/{40-diseno-migracion,90-mcu-configuracion}.md.
+ * (rcS). Ver docs/migration/{design/40-migration-design,implementation/90-mcu-config-replication}.md.
  */
 #include <stdio.h>
 #include <stdint.h>

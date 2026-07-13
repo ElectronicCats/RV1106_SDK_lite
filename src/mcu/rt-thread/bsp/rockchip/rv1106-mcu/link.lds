@@ -19,7 +19,7 @@ CL_SIZE = 0;
  * Shared DDR region for the A7<->RISC-V RPMsg vrings (CubeSat Paso 0).
  * This is in DDR (the MCU can address the full memory map), NOT in the MCU
  * SRAM window above. The base/size MUST match the Linux device-tree
- * reserved-memory / rpmsg "reg" node. See docs/riscv-migration/60-*.
+ * reserved-memory / rpmsg "reg" node. See docs/migration/60-*.
  */
 __linux_share_rpmsg_start__ = 0x0FF00000;
 __linux_share_rpmsg_end__   = 0x0FF00000 + 0x00100000;   /* 1 MB */

@@ -7,7 +7,7 @@
 # board variant and copies it to output/.
 #
 # Source tree vendored under src/mcu/ (RT-Thread BSP rv1106-mcu, from the
-# Luckfox SDK used as technical reference). See docs/riscv-migration/.
+# Luckfox SDK used as technical reference). See docs/migration/.
 #
 # Usage:  bash scripts/06-build-mcu.sh [clean]
 # ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@ fi
 log "Board: ${BOARD}  Toolchain: $(${RISCV_BIN}/riscv-none-embed-gcc -dumpversion)"
 
 # Sync the SHARED SX1262 command core from the Linux kmod (single source of
-# truth, docs/riscv-migration/40 §4). sx1262_cmd.c compiles unchanged on both
+# truth, docs/migration/design/40-migration-design.md §4). sx1262_cmd.c compiles unchanged on both
 # sides (its includes are #ifdef __KERNEL__-guarded); the RT-Thread glue lives
 # in applications/sx1262_port.{h,c}. Do NOT edit the synced copies.
 for f in sx1262_cmd.c sx1262_regs.h; do

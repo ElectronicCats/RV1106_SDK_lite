@@ -2,7 +2,7 @@
  * CubeSat — RT-Thread port layer for the shared SX1262 command core.
  *
  * sx1262_cmd.c (src/sx1262-kmod/, compiled UNCHANGED into this firmware — see
- * docs/riscv-migration/40-diseno-migracion.md §4) includes this header instead
+ * docs/migration/design/40-migration-design.md §4) includes this header instead
  * of the Linux ones when built without __KERNEL__. It provides:
  *   - the tiny subset of Linux types/macros cmd.c uses (spi_transfer, delays,
  *     div_u64, dev_* logging),

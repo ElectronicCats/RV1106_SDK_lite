@@ -1,6 +1,6 @@
 # CubeSat — userspace client for the MCU SensorService (BME280 + ICM-42670
 # over rpmsg). The I2C sensors are owned by the RISC-V MCU (RT-Thread); this
-# tool talks to them through /dev/rpmsg (see docs/riscv-migration/).
+# tool talks to them through /dev/rpmsg (see docs/migration/).
 CC      ?= gcc
 CFLAGS  ?= -Os -Wall
 LDFLAGS ?= -static

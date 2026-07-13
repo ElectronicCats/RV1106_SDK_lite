@@ -32,7 +32,7 @@ case "$TARGET" in
 esac
 
 # Update symlinks for each doc (recursively — also handles subfolders such as
-# docs/riscv-migration/{reference,design,implementation}/).
+# docs/migration/{reference,design,implementation}/).
 COUNT=0
 while IFS= read -r EN; do
     DIR="$(dirname "$EN")"

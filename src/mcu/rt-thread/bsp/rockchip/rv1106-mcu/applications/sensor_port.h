@@ -1,7 +1,7 @@
 /*
  * CubeSat — I2C port layer for the MCU sensor drivers (BME280 + ICM-42670).
  *
- * Mirrors the SX1262 pattern (docs/riscv-migration/90 §6/§7): the RV1106 MCU
+ * Mirrors the SX1262 pattern (docs/migration/implementation/90-mcu-config-replication.md §6/§7): the RV1106 MCU
  * BSP never wired RT_USING_I2C0/drv_i2c, so we drive HAL_I2C directly in POLL
  * mode with the ready-made g_i2c0Dev clock/pin facts, no RT-Thread I2C
  * framework. Both sensors hang off I2C0 (0xFF310000); Linux cedes the bus in

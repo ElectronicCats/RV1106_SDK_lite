@@ -1,6 +1,6 @@
 /*
  * CubeSat — SensorService (BME280 + ICM-42670 on I2C0) over rpmsg. Second
- * migrated peripheral service on the MCU (docs/riscv-migration/90 §10 checklist),
+ * migrated peripheral service on the MCU (docs/migration/implementation/90-mcu-config-replication.md §10 checklist),
  * built to the same shape as radio_service.c.
  *
  * Channel: "rpmsg-sensor" (ept 0x4006) on the shared rpmsg-lite instance. Linux

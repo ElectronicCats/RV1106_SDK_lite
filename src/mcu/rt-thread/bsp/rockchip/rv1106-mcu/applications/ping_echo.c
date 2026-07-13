@@ -6,7 +6,7 @@
  * The announced channel name "rpmsg-ap3-ch0" matches the in-kernel test driver
  * (drivers/rpmsg/rockchip_rpmsg_test.c) so Linux probes it automatically.
  *
- * TRANSPORT SHAPE (measured on board, see docs/riscv-migration/70-...md):
+ * TRANSPORT SHAPE (measured on board, see docs/migration/implementation/70-mailbox-loopback-test.md):
  *   - MCU->A7 (B2A) mailbox works: platform_notify() kicks Linux normally.
  *   - A7->MCU (A2B) mailbox payload/status regs are UNREADABLE by the SCR1, so
  *     there is NO usable RX doorbell. RX is done by POLLING: this thread drains
@@ -22,7 +22,7 @@
  *
  * Shared-memory base comes from the linker (__linux_share_rpmsg_start__), which
  * MUST match the Linux device-tree rpmsg "reg"/reserved-memory base.
- * See docs/riscv-migration/60-paso0-ipc-bringup.md.
+ * See docs/migration/implementation/60-ipc-bringup.md.
  *
  * Diagnostic markers (hpmcu_sram, readable from Linux via devmem — the
  * 0x800-0x83c range belongs to the boot/startup markers, this app uses 0x840+):

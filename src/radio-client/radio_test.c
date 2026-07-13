@@ -3,7 +3,7 @@
  *
  * The physical radio is controlled by the MCU's RT-Thread firmware; this tool
  * sends it commands over IPC (rpmsg). The channel is bound at boot (rcS).
- * See docs/riscv-migration/{40-diseno-migracion,90-mcu-configuracion...}.md.
+ * See docs/migration/{design/40-migration-design,implementation/90-mcu-config-replication}.md.
  */
 #include <stdio.h>
 #include <stdint.h>

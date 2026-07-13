@@ -88,11 +88,18 @@ Tras `./build.sh` en `output/images/`:
 
 ## Documentación
 
-En `docs/`: `toolchain.md`, `uboot.md`, `kernel.md`, `rootfs.md`, `packaging.md`, `pkg-system.md`
-- Bilingüe EN/ES: `./docs/switch.sh` para cambiar idioma, `./docs/switch.sh en|es` para fijar idioma
-- **Migración RISC-V / firmware del MCU** (arranque dual, RadioService, SensorService,
-  configuración registro a registro): `docs/riscv-migration/` (bilingüe EN/ES) — empezar
-  por `README.md` y `implementation/90-mcu-config-replication.md`.
+Toda la documentación está en `docs/` (bilingüe EN/ES). Empieza por el índice
+[`docs/README.md`](docs/README.md). Cambia de idioma con `./docs/switch.sh en|es`
+(o sin argumento para alternar).
+
+- **Arquitectura** — `docs/architecture/`: visión general, IPC rpmsg, y propiedad de
+  periféricos (qué posee el MCU RISC-V vs Linux).
+- **Build** — `docs/build/`: `toolchain`, `uboot`, `kernel`, `rootfs`, `packaging`, `pkg-system`.
+- **Periféricos** (los posee el MCU, manejados por rpmsg) — `docs/peripherals/`:
+  `sx1262-radio`, `bme280`, `icm42670`.
+- **Seguridad** — `docs/security/exploitation-guide.md`.
+- **Migración RISC-V / firmware del MCU** (registro del bring-up, arranque dual,
+  configuración registro a registro) — `docs/migration/`.
 
 ## Licencia
 

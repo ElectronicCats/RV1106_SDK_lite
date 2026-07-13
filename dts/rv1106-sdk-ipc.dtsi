@@ -315,7 +315,7 @@
 
 // I2C
 /*
- * I2C0 is CEDED TO THE RISC-V MCU (SensorService — docs/riscv-migration/90).
+ * I2C0 is CEDED TO THE RISC-V MCU (SensorService — docs/migration/implementation/90-mcu-config-replication.md).
  * The MCU owns BME280 (@0x76) and ICM-42670 (@0x68) over I2C0 and exposes them
  * to Linux via rpmsg ("rpmsg-sensor", /dev/rpmsg1, client sensor_test), exactly
  * as the SX1262 radios were ceded on SPI0/SPI1. Disabling the Linux controller
@@ -480,7 +480,7 @@
  * reserved-memory base MUST match the MCU firmware linker symbol
  * __linux_share_rpmsg_start__ (= 0x0ff00000) and rockchip,link-id must match
  * RL_PLATFORM_SET_LINK_ID(0,4)=0x04 used by the firmware.
- * See docs/riscv-migration/60-paso0-ipc-bringup.md.
+ * See docs/migration/implementation/60-ipc-bringup.md.
  * ----------------------------------------------------------------------------
  */
 &mailbox {

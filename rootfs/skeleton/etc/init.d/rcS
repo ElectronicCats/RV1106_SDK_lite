@@ -13,7 +13,7 @@
 /bin/hostname -F /etc/hostname
 
 # SX1262: the radio hardware is now owned by the RISC-V MCU (RadioService over
-# rpmsg — docs/riscv-migration/40). The old sx1262.ko is obsolete (its SPI DT
+# rpmsg — docs/migration/design/40-migration-design.md). The old sx1262.ko is obsolete (its SPI DT
 # nodes are disabled). Bind the MCU's "rpmsg-radio" channel to rpmsg_chrdev so
 # userspace can drive the radio via /dev/rpmsg (radio_test).
 # Bind MCU rpmsg service channels to rpmsg_chrdev so userspace can reach them:

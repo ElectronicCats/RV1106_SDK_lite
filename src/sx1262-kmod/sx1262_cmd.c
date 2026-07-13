@@ -1,5 +1,5 @@
 /* Portable command layer: compiles unchanged in the Linux kmod AND in the
- * RT-Thread MCU firmware (CubeSat migration, docs/riscv-migration/40 §4).
+ * RT-Thread MCU firmware (CubeSat migration, docs/migration/design/40-migration-design.md §4).
  * All OS services (SPI, GPIO, delays, logging) come from the HAL functions
  * declared below, implemented per-OS in sx1262_hal.c (Linux) or
  * sx1262_port_rtt.c (RT-Thread). */

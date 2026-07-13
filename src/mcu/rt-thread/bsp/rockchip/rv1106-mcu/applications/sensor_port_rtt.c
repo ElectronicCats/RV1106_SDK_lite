@@ -10,7 +10,7 @@
  * spin on HAL_I2C_IRQHandler() (which reads IPD and advances the state machine)
  * until it returns something other than HAL_BUSY. No interrupts are wired.
  *
- * Safety notes (learned from the SX1262 SPI bring-up, docs/riscv-migration/90):
+ * Safety notes (learned from the SX1262 SPI bring-up, docs/migration/implementation/90-mcu-config-replication.md):
  *   - Touching I2C0 registers before ungating its clock bus-stalls the SCR1 with
  *     no trace, so ungate PCLK/CLK_I2C0 (PERICRU) BEFORE HAL_I2C_Init.
  *   - Unlike SPI, the HAL_I2C poll path is bounded by a timeout, so a wiring

@@ -15,7 +15,7 @@
  * The mailbox channel index, link-id encoding, A2B/B2A direction and the
  * env_isr()<->virtqueue mapping must be co-tuned with the Linux-side
  * rockchip_rpmsg DT (mboxes/rockchip,link-id) during on-board bring-up.
- * See docs/riscv-migration/60-paso0-ipc-bringup.md.
+ * See docs/migration/implementation/60-ipc-bringup.md.
  */
 #include <stdio.h>
 #include <string.h>
@@ -69,7 +69,7 @@ static int32_t register_count = 0;
  * mailbox is only a doorbell anyway — the real payload travels in the vrings —
  * so we bypass A2B_STATUS entirely: a poll thread acks the doorbell and drains
  * both virtqueues directly. s_link_id is captured at init so we know which
- * vq_ids (RL_GET_VQ_ID) to service. See docs/riscv-migration/60-paso0-ipc-bringup.md.
+ * vq_ids (RL_GET_VQ_ID) to service. See docs/migration/implementation/60-ipc-bringup.md.
  */
 static uint32_t s_link_id = 0;
 static volatile int32_t s_rx_ready = 0;

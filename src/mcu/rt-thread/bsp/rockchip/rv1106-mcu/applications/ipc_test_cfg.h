@@ -7,7 +7,7 @@
  *                            A7<->MCU transport with the proven Rockchip pattern
  *                            (raw mailbox + shared scratch, NO vrings) and to
  *                            discover which mailbox registers the SCR1 can read.
- *                            See docs/riscv-migration/70-ipc-mailbox-loopback-test.md
+ *                            See docs/migration/implementation/70-mailbox-loopback-test.md
  *                            and riscv2arm.md.
  *
  * IPC_RAW_MBOX_TEST == 0  -> normal build: rpmsg-lite ping/echo (ping_echo.c).

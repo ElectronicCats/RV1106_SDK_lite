@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
  * Copyright (c) 2022 Rockchip Electronics Co., Ltd.
- * RV1106 RISC-V (HPMCU) port — CubeSat. See docs/riscv-migration/.
+ * RV1106 RISC-V (HPMCU) port — CubeSat. See docs/migration/.
  */
 #ifndef RPMSG_CONFIG_H_
 #define RPMSG_CONFIG_H_
