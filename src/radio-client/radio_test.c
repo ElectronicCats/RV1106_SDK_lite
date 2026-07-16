@@ -15,6 +15,9 @@
 #include <poll.h>
 #include <sys/ioctl.h>
 
+/* Shared CCSDS TC library (same code the MCU firmware runs) — for tcsecsend. */
+#include "ccsds_tc.h"
+
 struct rpmsg_endpoint_info {
     char name[32];
     uint32_t src;
@@ -653,6 +656,49 @@ int main(int argc, char **argv)
         if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
         printf("tcsend: APID 0x%03X %s", apid, radio_err_str(rsp[1]));
         if (rsp[1] == 0) printf(" (TC inyectado: %d bytes payload hex)", plen);
+        printf("\n");
+        return rsp[1] ? 1 : 0;
+    }
+    else if (!strcmp(cmd, "tcsecsend")) {
+        /* Build a Zephyr-style SECURED TC (secondary header + XTEA + CRC) with
+         * the shared ccsds library and inject it via CMD_CMD_TC_SEND (0x10).
+         * The firmware's ccsds_tc_unsecure() decrypts + verifies it; this proves
+         * end-to-end interop of the same library on both ends.
+         * Usage: radio_test tcsecsend <apid_hex> [payload_byte_hex ...]
+         *   Ej: radio_test tcsecsend 04 00 37   # secured thruster0 = 0x37 */
+        uint16_t apid;
+        uint8_t  payload[240];
+        int      plen = 0, i;
+
+        if (need_arg(argc >= 3, "apid_hex")) return 2;
+        apid = (uint16_t)(strtoul(argv[2], NULL, 16) & 0x07FF);
+        for (i = 3; i < argc && plen < (int)sizeof(payload); i++)
+            payload[plen++] = (uint8_t)strtoul(argv[i], NULL, 16);
+
+        packet_counter_t cnt;
+        spp_counters_init(&cnt);
+        space_packet_t pkt;
+        uint16_t total = 0;
+        int br = ccsds_tc_build(&pkt, &cnt, apid, 0x00 /*func*/, 0x01 /*key*/,
+                                payload, (uint16_t)plen, &total);
+        if (br != SPP_ERROR_NONE) {
+            fprintf(stderr, "tcsecsend: build error %d\n", br);
+            return 1;
+        }
+
+        uint8_t frame[300];
+        frame[0] = 0x10;  /* CMD_CMD_TC_SEND */
+        memcpy(frame + 1, &pkt, total);
+
+        fd = open_command_ept();
+        if (fd < 0) return 1;
+        n = xfer(fd, frame, 1 + total, rsp, sizeof(rsp), 3000);
+        close_ept(fd);
+
+        if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        printf("tcsecsend: APID 0x%03X %s", apid, radio_err_str(rsp[1]));
+        if (rsp[1] == 0)
+            printf(" (TC seguro: %d bytes wire, %d payload en claro)", total, plen);
         printf("\n");
         return rsp[1] ? 1 : 0;
     }
