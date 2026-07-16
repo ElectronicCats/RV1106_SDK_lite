@@ -5,7 +5,8 @@ This is the companion to [`usb-host-linux-golden.md`](usb-host-linux-golden.md)
 as a USB host, **why** each piece is there, and **why it works** — so you can
 change it. Everything here is verified on hardware: the MCU enumerates a
 Full-Speed mouse through a High-Speed hub, `NDEV=3` (root hub + hub + mouse),
-first attempt.
+first attempt — and then **reads the mouse's motion live** off its HID
+interrupt endpoint (§8).
 
 ## 1. What runs, and where
 
@@ -203,10 +204,134 @@ port (device/sink, no host VBUS) — the board can only host **through the hub**
 the port can't source VBUS (`PORTSC` CCS=0, `avalid=0`). This is why all host
 testing goes through the SL2.1A and its TT.
 
+## 8. From enumeration to data flow — a template for talking to any device
+
+**The mouse is not the point — it is the lever.** It is the smallest device that
+proves the host can do the thing every USB peripheral needs: after enumeration,
+actually *move data* to and from the device. Once you can read a mouse's motion
+you can, with the same three steps, read a USB sensor, drive a USB-serial
+adapter, talk to a custom gadget — anything. This section documents the mouse as
+a **worked example of the reusable recipe**; §8b spells out how to point that
+recipe at a different device.
+
+Enumeration only reads **who** the device is (descriptors, address, config).
+Moving data is a different transfer: here the host polls the device's HID
+**interrupt-IN** endpoint and decodes its reports. For a Full-Speed device behind
+a High-Speed hub that is a **periodic split** transaction — the xHC schedules it
+and drives the hub's TT automatically, using the endpoint context that
+enumeration already built (`xhci_set_configuration` adds *every* interface
+endpoint, not just EP0). So the plumbing exists; we only submit the transfer.
+
+Command `cmd=6` (`usb_m6_mouse_poll` in `usb_dwc3_probe.c`) runs *after* `cmd=5`
+has enumerated the bus — the enumerated devices and the running controller
+persist between commands. `dwc3_host_find_mouse` (`dwc3_host.c`) walks the
+enumerated devices for a HID interface with an interrupt-IN endpoint, caches it,
+and best-effort issues `SET_PROTOCOL(boot)` so the report layout is the fixed
+`[buttons][dX][dY]`. Then it streams reports for a 60 s window.
+
+**Mouse marker block** (A7 reads with `devmem`), kept away from the §2 hub-scan
+markers so the two never alias:
+
+| Addr | Name | Meaning |
+|------|------|---------|
+| `0xff6ffb00` | PRESENT | 1 if a HID interrupt-IN device was found |
+| `0xff6ffb04` | VIDPID | VID:PID of the mouse (`0x258A0029`) |
+| `0xff6ffb08` | INFO | `[31:24]`ep `[23:16]`bInterval `[15:8]`maxpacket `[7:0]`devnum |
+| `0xff6ffb10` | REPORTS | reports decoded so far — **climbs as you move** |
+| `0xff6ffb14` | LAST | last report `[7:0]`btn `[15:8]`dX `[23:16]`dY `[31:24]`len |
+| `0xff6ffb18` | ACCX | signed running sum of dX (grows as you slide right/left) |
+| `0xff6ffb1c` | ACCY | signed running sum of dY |
+| `0xff6ffb20` | RC | total reports delivered when the window closes |
+
+A moving mouse reads e.g. `REPORTS` 2 → 456 in ~11 s, with `ACCX`/`ACCY`
+tracking the hand's path (X swings ±, Y climbs on a circle). That is real data
+off the device, not just its identity.
+
+### 8a. Why a one-shot poll is not enough — the streaming design
+
+The obvious approach, one blocking `usb_int_msg` per poll, does **not** work here
+for two reasons, and both took a fix:
+
+1. **A missed report must not be fatal.** A boot mouse only sends a report when it
+   *moves*; an idle poll therefore never completes and times out. On this stack a
+   transfer timeout ran `abort_td`, which `BUG()`/`BUG_ON`-ed on the recovery path
+   — hanging the MCU's single USB thread the first time the mouse sat still. The
+   root cause is `xhci_wait_for_event` treating a timeout as unrecoverable. Fix:
+   it now **returns `NULL` on timeout for every event type** (never `BUG()`), and
+   `abort_td` is **best-effort** — it acknowledges whatever events arrive and
+   moves the dequeue pointer past the dead TD instead of asserting. Callers that
+   dereference the event NULL-check it (`xhci.c` command paths return `-ETIMEDOUT`).
+
+2. **The endpoint must stay armed, or reports fall in the gap.** A one-shot poll
+   arms a transfer, waits, and on timeout aborts — so between polls the endpoint
+   is *unarmed*, and a report that arrives in that window is lost. With continuous
+   motion producing a report every ~1 ms, a one-shot poll caught almost nothing.
+   Fix: `xhci_int_stream` (`xhci_ring.c`) keeps the endpoint armed the whole time
+   — arm one TRB, then wait; **a per-wait timeout is not fatal and does not abort**
+   (the TD is still armed in hardware, so we just loop and keep waiting on it).
+   Only after a real completion do we hand the report to the callback and re-arm.
+   Result: ~100 % listening duty cycle, so a moving mouse is observed
+   report-by-report. It aborts the last still-armed TD once, on the way out.
+
+**Why it works:** the interrupt EP context is valid from enumeration, so the xHC
+already knows the interval and the TT to split through; keeping exactly one TD
+armed means the very next report the mouse emits completes it, and re-arming
+immediately means the following report has a TD waiting too. The timeouts that
+used to hang the thread are now just quiet no-ops while the mouse is still.
+
+**Knobs:** the window is 60 s (`usb_m6_mouse_poll`); `XHCI_TIMEOUT` (5 s) is the
+per-wait granularity for the idle no-op loop — lower it only if you also audit the
+enumeration command waits that share it.
+
+### 8b. The reusable recipe — pointing this at a different device
+
+Everything above is three steps. To support a **different** device (say a USB
+temperature sensor, or a USB-serial bridge) you repeat the same three steps and
+change only what is device-specific:
+
+1. **Find it and pick an endpoint.** After `cmd=5` every device is in the
+   enumerated list (`usb_get_dev_index(i)`), fully described:
+   `dev->descriptor` (VID:PID, class) and `dev->config.if_desc[if].ep_desc[ep]`
+   (each endpoint's address, direction, type, max packet, interval). Select the
+   device by VID:PID or by `bInterfaceClass`, then pick the endpoint whose
+   `bmAttributes` transfer type and `bEndpointAddress` direction you need. This is
+   exactly what `dwc3_host_find_mouse` does (HID class + interrupt-IN); copy it and
+   change the match. No new enumeration code — the descriptors are already parsed.
+
+2. **Send any class/setup commands the device needs.** Control transfers go
+   through `usb_control_msg(dev, usb_sndctrlpipe(dev,0), bRequest, bmRequestType,
+   wValue, wIndex, data, len, timeout)`. The mouse uses one
+   (`SET_PROTOCOL(boot)`); a sensor might use a vendor command to start sampling,
+   a UART bridge a `SET_LINE_CODING`. Same call, different fields.
+
+3. **Move the data on the endpoint, by transfer type.** Build the pipe with the
+   matching macro and call the matching helper:
+
+   | Endpoint type | Pipe macro | Helper | Use for |
+   |---------------|-----------|--------|---------|
+   | Control | `usb_snd/rcvctrlpipe(dev,ep)` | `usb_control_msg` | setup/config, small reads |
+   | Bulk | `usb_snd/rcvbulkpipe(dev,ep)` | `submit_bulk_msg` | storage, bulk sensor dumps, UART data |
+   | Interrupt (one-shot) | `usb_rcvintpipe(dev,ep)` | `usb_int_msg` | a single latest reading on demand |
+   | Interrupt (streaming) | `usb_rcvintpipe(dev,ep)` | `xhci_int_stream` | continuous events (mouse motion, a sensor that pushes samples) |
+
+   The xHC handles HS/FS and the hub TT split transparently for all of them —
+   nothing in your device code changes whether it is plugged direct or behind the
+   hub. For anything that streams events, prefer `xhci_int_stream` over a
+   hand-rolled `usb_int_msg` loop: you inherit the non-fatal-timeout and
+   stay-armed behaviour from §8a instead of re-hitting the hang.
+
+**Wiring a new device into the probe** mirrors the mouse: add a `find_<device>` +
+a reader in `dwc3_host.c`, add a `cmd=N` handler in `usb_dwc3_probe.c` that calls
+them, and publish results to a fresh marker block (keep it clear of the ones this
+doc already uses). The mouse path (`dwc3_host_find_mouse` / `dwc3_host_mouse_stream`
+/ `usb_m6_mouse_poll`) is the copy-paste skeleton.
+
 ## Summary
 
 - Ported U-Boot xHCI (non-DM) + full hub class on the MCU; DCACHE off for DMA coherency.
 - Enumeration is host-driven through the hub's TT (splits); the hub never enumerates its own children.
 - FS-through-TT reliability = the two spec-mandated hub settle delays (§4). This is the root-cause fix.
 - Enumeration retry (§5) and connect-bounce de-dup (§6) make it robust and the count exact.
-- Verified: `NDEV=3`, mouse `258a:0029` behind SL2.1A `1a40:0101`, first attempt.
+- Moving data (§8) is a 3-step template — find device+endpoint, send class setup, run the transfer by type — with the mouse as the worked example; §8b points it at any other device (sensor, UART, gadget).
+- The streaming read (`xhci_int_stream`) + non-fatal transfer-timeout path (`abort_td`/`xhci_wait_for_event`) are the reusable pieces that make continuous event reads survive an idle device.
+- Verified: `NDEV=3`, mouse `258a:0029` behind SL2.1A `1a40:0101`, first attempt; then its motion read live (`REPORTS` 2 → 456 in ~11 s).

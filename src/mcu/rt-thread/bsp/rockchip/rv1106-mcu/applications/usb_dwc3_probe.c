@@ -703,6 +703,105 @@ static void usb_m4_uboot_host(void)
 }
 
 /* ================================================================== *
+ *  M6 — poll the enumerated HID mouse and show its motion             *
+ *                                                                     *
+ *  Runs AFTER M4 (cmd=5) has enumerated the bus; the enumerated       *
+ *  devices and the running controller persist between commands. It    *
+ *  finds the mouse's interrupt-IN endpoint and submits interrupt-IN   *
+ *  transfers for a bounded window. Move the mouse and watch REPORTS /  *
+ *  LAST / ACCX / ACCY change — that is data flow, not just "who are    *
+ *  you". ACCX/ACCY are the running sums of the per-report dX/dY, so    *
+ *  they grow as you slide the mouse in one direction.                 *
+ * ================================================================== */
+extern int          dwc3_host_find_mouse(void);
+extern unsigned int dwc3_host_mouse_vidpid(void);
+extern unsigned int dwc3_host_mouse_info(void);
+extern int          dwc3_host_mouse_stream(unsigned long window_ms,
+                        void (*cb)(void *arg, unsigned char *buf, int len),
+                        void *arg);
+
+/* Mouse marker block (A7 reads with `devmem`). Kept away from the M4 hub-scan
+ * markers (0xff6ff9xx / 0xff6ffaxx) so the two never alias. */
+#define USB_REG_MSE_PRESENT 0xff6ffb00U  /* 1 if a HID interrupt-IN device was found     */
+#define USB_REG_MSE_VIDPID  0xff6ffb04U  /* VID:PID of the mouse                         */
+#define USB_REG_MSE_INFO    0xff6ffb08U  /* [31:24]ep [23:16]bInterval [15:8]maxp [7:0]devnum */
+#define USB_REG_MSE_POLLS   0xff6ffb0cU  /* total interrupt-IN attempts (idle heartbeat) */
+#define USB_REG_MSE_REPORTS 0xff6ffb10U  /* successful reports (increments as you move)  */
+#define USB_REG_MSE_LAST    0xff6ffb14U  /* last report [7:0]btn [15:8]dX [23:16]dY [31:24]len */
+#define USB_REG_MSE_ACCX    0xff6ffb18U  /* signed running sum of dX (grows moving right)*/
+#define USB_REG_MSE_ACCY    0xff6ffb1cU  /* signed running sum of dY (grows moving down) */
+#define USB_REG_MSE_RC      0xff6ffb20U  /* last usb_int_msg return code (diagnostic)    */
+
+#define USB_M6_ENTER    0x00000060U
+#define USB_M6_POLLING  0x00000061U
+#define USB_M6_DONE     0x00000062U
+#define USB_M6_NOMOUSE  0x000000E7U
+
+/* Running totals updated by the per-report callback below. */
+static int s_mse_reports;
+static int s_mse_accx;
+static int s_mse_accy;
+
+/* Called once per HID report by the streaming poll. Boot-protocol layout is
+ * [0]=buttons, [1]=dX, [2]=dY (signed). Accumulate dX/dY so ACCX/ACCY grow as
+ * the mouse slides one way, and publish the raw last report. */
+static void mouse_report_cb(void *arg, unsigned char *buf, int len)
+{
+    (void)arg;
+    mw(USB_REG_MSE_POLLS, (uint32_t)(s_mse_reports + 1)); /* activity heartbeat */
+    if (len < 3)
+        return;
+    {
+        signed char dx = (signed char)buf[1];
+        signed char dy = (signed char)buf[2];
+        s_mse_reports++;
+        s_mse_accx += dx;
+        s_mse_accy += dy;
+        mw(USB_REG_MSE_REPORTS, (uint32_t)s_mse_reports);
+        mw(USB_REG_MSE_LAST, ((uint32_t)buf[0])
+                           | (((uint32_t)buf[1] & 0xff) << 8)
+                           | (((uint32_t)buf[2] & 0xff) << 16)
+                           | (((uint32_t)len & 0xff) << 24));
+        mw(USB_REG_MSE_ACCX, (uint32_t)s_mse_accx);
+        mw(USB_REG_MSE_ACCY, (uint32_t)s_mse_accy);
+    }
+}
+
+static void usb_m6_mouse_poll(void)
+{
+    int nrep;
+
+    mw(USB_REG_M2STAGE, USB_M6_ENTER);
+
+    /* Clear the marker block: it lives in DDR that survives a hot-reload, so
+     * stale values from a previous run would otherwise look like this run. */
+    mw(USB_REG_MSE_PRESENT, 0); mw(USB_REG_MSE_VIDPID, 0); mw(USB_REG_MSE_INFO, 0);
+    mw(USB_REG_MSE_POLLS, 0);   mw(USB_REG_MSE_REPORTS, 0); mw(USB_REG_MSE_LAST, 0);
+    mw(USB_REG_MSE_ACCX, 0);    mw(USB_REG_MSE_ACCY, 0);    mw(USB_REG_MSE_RC, 0);
+
+    if (!dwc3_host_find_mouse())
+    {
+        mw(USB_REG_MSE_PRESENT, 0);
+        mw(USB_REG_M2STAGE, USB_M6_NOMOUSE);
+        return;
+    }
+    mw(USB_REG_MSE_PRESENT, 1);
+    mw(USB_REG_MSE_VIDPID, dwc3_host_mouse_vidpid());
+    mw(USB_REG_MSE_INFO,   dwc3_host_mouse_info());
+    mw(USB_REG_M2STAGE, USB_M6_POLLING);
+
+    /* Stream reports for 60 s, keeping the endpoint armed the whole time so a
+     * moving mouse is caught report-by-report. The callback publishes markers. */
+    s_mse_reports = 0;
+    s_mse_accx = 0;
+    s_mse_accy = 0;
+    nrep = dwc3_host_mouse_stream(60000, mouse_report_cb, 0);
+    mw(USB_REG_MSE_RC, (uint32_t)nrep);   /* total reports delivered this window */
+
+    mw(USB_REG_M2STAGE, USB_M6_DONE);
+}
+
+/* ================================================================== *
  *  Watcher thread: wait for the A7 command and run the experiment     *
  * ================================================================== */
 static void usb_probe_thread(void *arg)
@@ -720,6 +819,7 @@ static void usb_probe_thread(void *arg)
         else if (cmd == 3U) { usb_m2_run_and_watch(); mw(USB_REG_CMD, USB_CMD_DONE); }
         else if (cmd == 4U) { usb_m3_uboot_gadget();  mw(USB_REG_CMD, USB_CMD_DONE); }
         else if (cmd == 5U) { usb_m4_uboot_host();    mw(USB_REG_CMD, USB_CMD_DONE); }
+        else if (cmd == 6U) { usb_m6_mouse_poll();    mw(USB_REG_CMD, USB_CMD_DONE); }
         rt_thread_mdelay(200);   /* quiet polling; the A7 sets the pace */
     }
 }

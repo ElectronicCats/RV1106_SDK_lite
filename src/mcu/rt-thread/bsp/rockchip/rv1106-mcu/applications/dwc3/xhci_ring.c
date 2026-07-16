@@ -477,11 +477,13 @@ union xhci_trb *xhci_wait_for_event(struct xhci_ctrl *ctrl, trb_type expected)
 	HDBG(0x31);   /* timed out waiting for the event */
 	*(volatile unsigned int *)0xff6ff9c8U = xhci_readl(&ctrl->hcor->or_usbsts);
 
-	if (expected == TRB_TRANSFER)
-		return NULL;
-
-	printf("XHCI timeout on event type %d... cannot recover.\n", expected);
-	BUG();
+	/* Timeout: no matching event arrived. Return NULL for EVERY expected type
+	 * and let the caller recover. A BUG() here would hang the MCU's single USB
+	 * thread, and some timeouts are legitimate — e.g. polling the interrupt-IN
+	 * endpoint of an idle mouse never completes until the mouse moves, so the
+	 * transfer must time out cleanly and be retryable, not fatal. Callers that
+	 * dereference the returned event MUST NULL-check it first. */
+	return NULL;
 }
 
 /*
@@ -497,31 +499,27 @@ static void abort_td(struct usb_device *udev, int ep_index)
 	struct xhci_ctrl *ctrl = xhci_get_ctrl(udev);
 	struct xhci_ring *ring =  ctrl->devs[udev->slot_id]->eps[ep_index].ring;
 	union xhci_trb *event;
-	u32 field;
 
+	/* Best-effort ring recovery. This runs on the timeout path (a transfer that
+	 * never completed — e.g. an idle interrupt-IN poll), so every wait here can
+	 * itself time out and return NULL. Tolerate that instead of BUG()-ing: just
+	 * acknowledge whatever events do arrive and move the dequeue pointer past the
+	 * dead TD so the endpoint is reusable on the next transfer. */
 	xhci_queue_command(ctrl, NULL, udev->slot_id, ep_index, TRB_STOP_RING);
 
-	event = xhci_wait_for_event(ctrl, TRB_TRANSFER);
-	field = le32_to_cpu(event->trans_event.flags);
-	BUG_ON(TRB_TO_SLOT_ID(field) != udev->slot_id);
-	BUG_ON(TRB_TO_EP_INDEX(field) != ep_index);
-	BUG_ON(GET_COMP_CODE(le32_to_cpu(event->trans_event.transfer_len
-		!= COMP_STOP)));
-	xhci_acknowledge_event(ctrl);
+	event = xhci_wait_for_event(ctrl, TRB_TRANSFER);   /* Stop → transfer event */
+	if (event)
+		xhci_acknowledge_event(ctrl);
 
-	event = xhci_wait_for_event(ctrl, TRB_COMPLETION);
-	BUG_ON(TRB_TO_SLOT_ID(le32_to_cpu(event->event_cmd.flags))
-		!= udev->slot_id || GET_COMP_CODE(le32_to_cpu(
-		event->event_cmd.status)) != COMP_SUCCESS);
-	xhci_acknowledge_event(ctrl);
+	event = xhci_wait_for_event(ctrl, TRB_COMPLETION); /* Stop command result   */
+	if (event)
+		xhci_acknowledge_event(ctrl);
 
 	xhci_queue_command(ctrl, (void *)((uintptr_t)ring->enqueue |
 		ring->cycle_state), udev->slot_id, ep_index, TRB_SET_DEQ);
-	event = xhci_wait_for_event(ctrl, TRB_COMPLETION);
-	BUG_ON(TRB_TO_SLOT_ID(le32_to_cpu(event->event_cmd.flags))
-		!= udev->slot_id || GET_COMP_CODE(le32_to_cpu(
-		event->event_cmd.status)) != COMP_SUCCESS);
-	xhci_acknowledge_event(ctrl);
+	event = xhci_wait_for_event(ctrl, TRB_COMPLETION); /* Set TR Dequeue result */
+	if (event)
+		xhci_acknowledge_event(ctrl);
 }
 
 /*
@@ -767,6 +765,100 @@ int xhci_bulk_tx(struct usb_device *udev, unsigned long pipe,
 	xhci_inval_cache((uintptr_t)buffer, length);
 
 	return (udev->status != USB_ST_NOT_PROC) ? 0 : -1;
+}
+
+/*
+ * Queue a single Normal TRB (one report's worth, <= 8 bytes so it never spans a
+ * 64 KB boundary => exactly one TRB) on an endpoint ring and ring the doorbell.
+ * Factored out of xhci_bulk_tx for the interrupt streaming poll below.
+ */
+static void queue_one_normal_trb(struct xhci_ctrl *ctrl, struct usb_device *udev,
+				 int ep_index, unsigned long pipe,
+				 void *buffer, int length)
+{
+	struct xhci_virt_device *virt_dev = ctrl->devs[udev->slot_id];
+	struct xhci_ep_ctx *ep_ctx = xhci_get_ep_ctx(ctrl, virt_dev->out_ctx,
+						     ep_index);
+	struct xhci_ring *ring = virt_dev->eps[ep_index].ring;
+	struct xhci_generic_trb *start_trb;
+	int start_cycle;
+	int maxpacketsize = usb_maxpacket(udev, pipe);
+	u32 field, length_field, trb_fields[4];
+	u64 addr = (uintptr_t)buffer;
+
+	prepare_ring(ctrl, ring, le32_to_cpu(ep_ctx->ep_info) & EP_STATE_MASK);
+	start_trb = &ring->enqueue->generic;
+	start_cycle = ring->cycle_state;
+
+	xhci_flush_cache((uintptr_t)buffer, length);
+
+	field = 0;
+	if (start_cycle == 0)
+		field |= TRB_CYCLE;
+	field |= TRB_IOC;                 /* interrupt on completion */
+	if (usb_pipein(pipe))
+		field |= TRB_ISP;         /* interrupt on short packet (IN) */
+
+	length_field = ((length & TRB_LEN_MASK) |
+			xhci_v1_0_td_remainder(0, length,
+					       DIV_ROUND_UP(length, maxpacketsize),
+					       maxpacketsize, 0) |
+			((0 & TRB_INTR_TARGET_MASK) << TRB_INTR_TARGET_SHIFT));
+
+	trb_fields[0] = lower_32_bits(addr);
+	trb_fields[1] = upper_32_bits(addr);
+	trb_fields[2] = length_field;
+	trb_fields[3] = field | (TRB_NORMAL << TRB_TYPE_SHIFT);
+
+	queue_trb(ctrl, ring, false, trb_fields);
+	giveback_first_trb(udev, ep_index, start_cycle, start_trb);
+}
+
+/*
+ * High-duty-cycle interrupt-IN streaming poll.
+ *
+ * The one-shot usb_int_msg (xhci_bulk_tx) arms a transfer, waits, and on timeout
+ * ABORTS the ring — so between polls the endpoint is unarmed and a HID report
+ * that arrives in that gap is lost. For "watch the mouse move" we instead keep
+ * the endpoint armed continuously: arm one TRB, then wait; a per-wait timeout is
+ * NOT fatal and does NOT abort — the TD is still armed in hardware, so we simply
+ * loop and keep waiting on the same TD. Only after a real completion do we hand
+ * the report to the callback and re-arm. This gives ~100% listening duty cycle,
+ * so a moving mouse's reports are caught instead of missed in an abort gap.
+ *
+ * Runs for window_ms, calls cb(arg, buffer, act_len) per report, aborts the last
+ * armed TD on the way out, and returns the number of reports delivered.
+ */
+int xhci_int_stream(struct usb_device *udev, unsigned long pipe,
+		    void *buffer, int length, unsigned long window_ms,
+		    void (*cb)(void *arg, unsigned char *buf, int len), void *arg)
+{
+	struct xhci_ctrl *ctrl = xhci_get_ctrl(udev);
+	int ep_index = usb_pipe_ep_index(pipe);
+	unsigned long start = get_timer(0);
+	int count = 0;
+	union xhci_trb *event;
+
+	queue_one_normal_trb(ctrl, udev, ep_index, pipe, buffer, length);
+
+	while (get_timer(start) < window_ms) {
+		event = xhci_wait_for_event(ctrl, TRB_TRANSFER);
+		if (!event)
+			continue;   /* wait timed out; TD still armed, keep waiting */
+
+		record_transfer_result(udev, event, length);
+		xhci_acknowledge_event(ctrl);
+		xhci_inval_cache((uintptr_t)buffer, length);
+
+		if (cb)
+			cb(arg, (unsigned char *)buffer, udev->act_len);
+		count++;
+
+		queue_one_normal_trb(ctrl, udev, ep_index, pipe, buffer, length);
+	}
+
+	abort_td(udev, ep_index);   /* reclaim the last still-armed TD */
+	return count;
 }
 
 /**
