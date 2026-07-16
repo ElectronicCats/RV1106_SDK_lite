@@ -9,7 +9,7 @@ LDFLAGS ?= -static
 # firmware builds), used by the `tcsecsend` command to forge secured TCs.
 MCU_APP := ../mcu/rt-thread/bsp/rockchip/rv1106-mcu/applications
 CCSDS_SRC := $(MCU_APP)/spp.c $(MCU_APP)/ccsds/ccsds_crc.c \
-             $(MCU_APP)/ccsds/ccsds_xtea.c $(MCU_APP)/ccsds/ccsds_tc.c
+             $(MCU_APP)/ccsds/ccsds_aes.c $(MCU_APP)/ccsds/ccsds_tc.c
 CFLAGS  += -I$(MCU_APP) -I$(MCU_APP)/ccsds
 
 radio_test: radio_test.c $(CCSDS_SRC)

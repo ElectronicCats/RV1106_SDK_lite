@@ -22,8 +22,58 @@ port RISC-V de pwncube (esta rama `ccsds-tc-library`) con ambos.
   malinterpretado por el otro. (Ya verificado en hardware.)
 - **Esta rama implementa ambos estilos del lado pwncube:** el camino en claro
   (compatible PWNSat, conserva las vulns del CTF) y una librería de *TC seguro*
-  (`applications/ccsds/`) modelada sobre la idea de ElectronicCats — ver la última
-  sección para saber qué tan fiel es.
+  (`applications/ccsds/`) ahora **alineada byte-a-byte con FlatSat
+  (ElectronicCats)** — AES-128-CTR + secondary header timestamp + CRC-sobre-
+  plaintext — así que pwncube puede construir y descifrar frames nativos de
+  ElectronicCats (con el mismo nivel de dificultad). Ver "Qué implementa esta rama".
+
+## Estándares CCSDS: qué son SPP y TC
+
+Ambos firmwares dicen hablar CCSDS. Hay dos estándares distintos en juego, y la
+distinción importa para la comparación de abajo.
+
+### SPP — Space Packet Protocol (CCSDS 133.0-B-2)
+
+El **formato de paquete de capa de aplicación**. Define el "space packet"
+autodescriptivo: un **Primary Header de 6 octetos** seguido de un **Secondary
+Header** opcional y un **Packet Data Field**. El primary header lleva:
+
+| Campo | Bits | Significado |
+|-------|------|-------------|
+| Packet Version Number | 3 | `000` |
+| Packet Type | 1 | 0 = telemetría (TM), 1 = telecomando (TC) |
+| Secondary Header Flag | 1 | 1 = hay secondary header presente |
+| APID | 11 | Application Process ID — rutea el paquete a un subsistema |
+| Sequence Flags | 2 | 11 = unsegmentado, 01/10 = primer/último segmento |
+| Packet Sequence Count | 14 | contador por APID |
+| Packet Data Length | 16 | (longitud del data field en octetos) − 1 |
+
+SPP es agnóstico del transporte: el mismo paquete puede ir sobre un enlace RF, un
+enlace USB o un bus a bordo. Su campo opcional al final, **Packet Error Control**,
+es un CRC-16-CCITT. Ambas variantes de FlatSat usan este mismo primary header —
+esa parte es estándar e idéntica.
+
+### TC — Telecommand
+
+"TC" en CCSDS es una **familia** de estándares para el uplink (tierra →
+satélite), por debajo del space packet:
+
+- **TC Space Data Link Protocol (CCSDS 232.0-B)** — TC Transfer Frames, canales
+  virtuales, el protocolo FARM/COP-1 de aceptación de comandos.
+- **TC Synchronization and Channel Coding (CCSDS 231.0-B)** — CLTUs, código BCH,
+  randomización en la capa física.
+- **Space Data Link Security, SDLS (CCSDS 355.0-B)** — la forma *estándar* de
+  añadir autenticación y cifrado (un security header + trailer con un MAC) a esos
+  transfer frames.
+
+Ningún firmware de FlatSat implementa el stack 232/231 completo (ponen space
+packets directo sobre un PHY LoRa crudo). Donde difieren es en **seguridad**:
+FlatSat (PWNSat) manda el TC space packet en claro; FlatSat (ElectronicCats)
+envuelve un esquema de seguridad casero (timestamp + cifrado por niveles + CRC)
+*inspirado* en SDLS pero que **no** es SDLS (sin MAC real, clave fija). Este
+documento, y la librería de esta rama, replican a propósito el esquema de
+ElectronicCats en vez del SDLS completo, y marcan exactamente dónde es más débil
+que el estándar.
 
 ## Formatos de frame, lado a lado
 
@@ -150,29 +200,35 @@ ccsds_tc_sec_header_t sh; int crc_ok = 0;
 command_apid_handler(&pkt);
 ```
 
-## Qué añade esta rama, y qué tan fiel es
+## Qué implementa esta rama
 
 La librería de TC seguro de esta rama (`applications/ccsds/ccsds_tc.c` +
-`ccsds_xtea.c`) implementa la *forma* del perfil ElectronicCats — un TC seguro
-con secondary header, payload cifrado y CRC — pero es una **variante, no un clon
-byte-a-byte**:
+`ccsds_aes.c`) está **alineada byte-a-byte con FlatSat (ElectronicCats)** — mismo
+secondary header, mismos cifrados, misma clave, mismo orden de CRC:
 
 | Campo | FlatSat (ElectronicCats) | FlatSat (PWNSat) | lib segura pwncube (esta rama) |
 |-------|--------------------------|------------------|--------------------------------|
 | Primary header | 6 B CCSDS | 6 B CCSDS | 6 B CCSDS |
-| Secondary header | 4 B **timestamp** (=IV) | ninguno | 4 B **cmd_counter+func_code+key_id** |
-| Cifrado | ninguno / XOR `PWNSAT` / **AES-128-CTR** | ninguno | **XTEA-ECB** |
-| Clave | `PWNSAT_K3Y_2026!` | — | `PwnCubeSatLoRaKy` |
-| CRC-16-CCITT | sí, sobre **plaintext** | no | sí, sobre **ciphertext** |
-| ¿Exige sec-hdr? | **sí** (rechaza planos) | n/a | no (acepta planos) |
+| Secondary header | 4 B **timestamp** (=IV) | ninguno | 4 B **timestamp** (=IV) ✅ |
+| Cifrado | ninguno / XOR `PWNSAT` / **AES-128-CTR** | ninguno | ninguno / XOR `PWNSAT` / **AES-128-CTR** ✅ |
+| Clave | `PWNSAT_K3Y_2026!` | — | `PWNSAT_K3Y_2026!` ✅ |
+| CRC-16-CCITT | sí, sobre **plaintext** | no | sí, sobre **plaintext** ✅ |
+| Niveles de dificultad | 0/1 plano, 2 XOR, ≥3 AES | n/a | 0/1 plano, 2 XOR, ≥3 AES ✅ |
+| ¿Exige sec-hdr? | **sí** (rechaza planos) | n/a | **no** (acepta planos) — vuln CTF |
 
-Así que el camino seguro de pwncube **no** es interoperable con ElectronicCats
-tal cual. Para que pwncube reciba y descifre los TC/TM nativos de ElectronicCats,
-la librería necesitaría: reinterpretar el secondary header como timestamp,
-cambiar el cifrado a AES-128-CTR (clave `PWNSAT_K3Y_2026!`, IV = timestamp), el
-nivel XOR `"PWNSAT"`, y mover la verificación de CRC a *después* de descifrar. Es
-un cambio deliberado y aparte; la librería actual mantiene XTEA a propósito (un
-cifrado más ligero y autocontenido para el CTF).
+El núcleo AES-128 es un port byte-a-byte del de ElectronicCats (verificado contra
+el vector NIST FIPS-197), el IV de CTR es `timestamp || 0×8 || índice_de_bloque`,
+y el CRC-16 se calcula sobre el frame en claro — así que un frame construido por
+`ccsds_tc_build()` lo acepta el `process_incoming_telecommand()` real de
+ElectronicCats y viceversa, **siempre que ambos extremos elijan el mismo nivel de
+dificultad** (`ccsds_tc_set_difficulty()`; el nivel es out-of-band, igual que en
+el FlatSat). La única divergencia deliberada es la última fila: pwncube **no**
+exige la capa (sigue aceptando frames planos PWNSat e ignora un CRC malo) — esa es
+la vuln intencional de sin-auth, y es lo que deja a esta rama hablar **ambos**
+perfiles a la vez.
+
+El test host `applications/ccsds/test/tc_test.c` replica la lógica exacta del
+receptor ElectronicCats para probar la aceptación.
 
 ## Parámetros de RF / PHY
 
@@ -198,14 +254,14 @@ necesario pero no suficiente — los formatos de frame de arriba siguen difirien
   dificultad 0 (payload en claro), ElectronicCats igual emite un secondary header
   de 4 B (timestamp) y un CRC de 2 B que el parser PWNSat/pwncube no espera. Las
   dificultades más altas añaden XOR/AES encima.
-- **pwncube recibe los frames de ElectronicCats a nivel PHY** (la radio funciona
-  — verificado: RX en radio0, RSSI/SNR buenos) **pero los malinterpreta**: con
-  `sec_hdr=1` corre `ccsds_tc_unsecure`, lee el timestamp como counter/func/key, e
-  intenta XTEA-descifrar un payload AES/en-claro → argumentos basura (y, al no
-  estar alineado a bloque, puede abortar antes de descifrar). El test RF por aire
-  que *sí* funcionó usó el formato seguro **propio** de pwncube transmitido a mano
-  por el pipe crudo `TX <hex>` del FlatSat — probó RF + la librería de pwncube, no
-  interop nativa con ElectronicCats.
+- **pwncube ↔ ElectronicCats: ahora compatibles a nivel wire para TC** (esta
+  rama). Con la librería alineada (AES-128-CTR + timestamp + CRC-sobre-plaintext) y
+  el mismo nivel de dificultad en ambos extremos, un frame construido por
+  `ccsds_tc_build()` de pwncube lo acepta el `process_incoming_telecommand()` de
+  ElectronicCats y, al revés, `ccsds_tc_unsecure()` de pwncube descifra y verifica
+  el CRC de un TC seguro nativo de ElectronicCats. Primero hay que alinear el PHY
+  (ver la tabla RF). pwncube sigue aceptando frames planos PWNSat también, así que
+  habla ambos.
 
 Ver también: `applications/ccsds/README.md` (la librería de TC seguro),
 `docs/vulnerability-comparison.md` (vulns compartidas/porteadas),

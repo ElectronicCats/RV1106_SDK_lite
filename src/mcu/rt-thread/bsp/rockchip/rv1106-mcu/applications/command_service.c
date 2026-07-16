@@ -470,14 +470,14 @@ static int process_rx_packet(const uint8_t *buf, uint8_t len)
         return -1;
 
     /* ElectronicCats-style secured TC: if the frame carries the secondary header
-     * (sec_hdr_flag=1), verify the CRC and XTEA-decrypt the args in place so the
+     * (sec_hdr_flag=1), verify the CRC and AES-128-CTR-decrypt the args in place so the
      * APID handler below sees plaintext. WEAK BY DESIGN: the CRC result is
      * computed but NOT enforced, and a plaintext TC (sec_hdr_flag=0) is still
      * accepted and dispatched unchanged — so every existing over-the-air
      * exploit keeps working. This is the generalisation of the no-auth vuln. */
-    ccsds_tc_sec_header_t sh;
+    uint32_t ts = 0;
     int crc_ok = 0;
-    (void)ccsds_tc_unsecure(&pkt, &sh, &crc_ok);   /* return + crc_ok ignored */
+    (void)ccsds_tc_unsecure(&pkt, &ts, &crc_ok);   /* return + crc_ok ignored */
 
     s_tc_count++;
 

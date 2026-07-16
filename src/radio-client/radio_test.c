@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <poll.h>
+#include <time.h>
 #include <sys/ioctl.h>
 
 /* Shared CCSDS TC library (same code the MCU firmware runs) — for tcsecsend. */
@@ -660,10 +661,12 @@ int main(int argc, char **argv)
         return rsp[1] ? 1 : 0;
     }
     else if (!strcmp(cmd, "tcsecsend")) {
-        /* Build an ElectronicCats-style SECURED TC (secondary header + XTEA + CRC) with
-         * the shared ccsds library and inject it via CMD_CMD_TC_SEND (0x10).
-         * The firmware's ccsds_tc_unsecure() decrypts + verifies it; this proves
-         * end-to-end interop of the same library on both ends.
+        /* Build a FlatSat (ElectronicCats)-format SECURED TC (timestamp secondary
+         * header + AES-128-CTR/XOR/plaintext by difficulty + CRC-16) with the
+         * shared ccsds library and inject it via CMD_CMD_TC_SEND (0x10). The
+         * firmware's ccsds_tc_unsecure() decrypts + verifies it — same library on
+         * both ends. Difficulty via env CCSDS_DIFF (0/1 plain, 2 XOR, >=3 AES;
+         * default 3) and MUST match the receiver's difficulty.
          * Usage: radio_test tcsecsend <apid_hex> [payload_byte_hex ...]
          *   Ej: radio_test tcsecsend 04 00 37   # secured thruster0 = 0x37 */
         uint16_t apid;
@@ -675,12 +678,16 @@ int main(int argc, char **argv)
         for (i = 3; i < argc && plen < (int)sizeof(payload); i++)
             payload[plen++] = (uint8_t)strtoul(argv[i], NULL, 16);
 
+        const char *diff_env = getenv("CCSDS_DIFF");
+        uint8_t diff = diff_env ? (uint8_t)strtoul(diff_env, NULL, 10) : CCSDS_TC_DIFF_AES;
+        ccsds_tc_set_difficulty(diff);
+        uint32_t ts = (uint32_t)time(NULL);
+
         packet_counter_t cnt;
         spp_counters_init(&cnt);
         space_packet_t pkt;
         uint16_t total = 0;
-        int br = ccsds_tc_build(&pkt, &cnt, apid, 0x00 /*func*/, 0x01 /*key*/,
-                                payload, (uint16_t)plen, &total);
+        int br = ccsds_tc_build(&pkt, &cnt, apid, ts, payload, (uint16_t)plen, &total);
         if (br != SPP_ERROR_NONE) {
             fprintf(stderr, "tcsecsend: build error %d\n", br);
             return 1;
@@ -698,7 +705,8 @@ int main(int argc, char **argv)
         if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
         printf("tcsecsend: APID 0x%03X %s", apid, radio_err_str(rsp[1]));
         if (rsp[1] == 0)
-            printf(" (TC seguro: %d bytes wire, %d payload en claro)", total, plen);
+            printf(" (TC seguro EC: diff=%d ts=0x%08X, %d bytes wire, %d payload)",
+                   diff, (unsigned)ts, total, plen);
         printf("\n");
         return rsp[1] ? 1 : 0;
     }
