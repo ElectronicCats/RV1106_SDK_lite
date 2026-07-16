@@ -2,8 +2,14 @@
 
 Librería CCSDS pequeña y autocontenida para el firmware del CubeSat. Provee el
 codec del encabezado primario del Space Packet Protocol (SPP) y una capa de
-**telecomando (TC) seguro** modelada en el FlatSat con Zephyr — secondary header
-+ cifrado XTEA + CRC-16 — sobre el frame SPP.
+**telecomando (TC) seguro** al estilo de **FlatSat (ElectronicCats)** —
+secondary header + cifrado + CRC-16 — sobre el frame SPP.
+
+> Es una **variante**, no un clon byte-a-byte de ese firmware: usa XTEA y un
+> secondary header `counter/func/key`, mientras que FlatSat (ElectronicCats) usa
+> AES-128-CTR/XOR y un secondary header `timestamp`. Para la comparación completa
+> de los tres protocolos (ElectronicCats vs PWNSat vs esta librería) ver
+> `docs/flatsat-protocol-comparison.md` (en la raíz del repo).
 
 > Esto es un **ejercicio de CTF**. La librería es una implementación completa y
 > correcta, pero se conecta a la misión con **debilidades intencionales** para

@@ -660,7 +660,7 @@ int main(int argc, char **argv)
         return rsp[1] ? 1 : 0;
     }
     else if (!strcmp(cmd, "tcsecsend")) {
-        /* Build a Zephyr-style SECURED TC (secondary header + XTEA + CRC) with
+        /* Build an ElectronicCats-style SECURED TC (secondary header + XTEA + CRC) with
          * the shared ccsds library and inject it via CMD_CMD_TC_SEND (0x10).
          * The firmware's ccsds_tc_unsecure() decrypts + verifies it; this proves
          * end-to-end interop of the same library on both ends.

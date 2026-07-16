@@ -1,8 +1,11 @@
 /*
  * ccsds_tc — Telecommand security layer (CCSDS-style secured TC).
  *
- * This is the "complete" telecommand frame the Zephyr FlatSat used, layered on
- * top of the SPP primary header (spp.h):
+ * This is a "complete" telecommand frame in the style of FlatSat (ElectronicCats),
+ * layered on top of the SPP primary header (spp.h). NOTE: it is a *variant*, not
+ * a byte-exact clone of that firmware — see docs/flatsat-protocol-comparison.md
+ * (this uses XTEA + a counter/func/key secondary header; ElectronicCats uses
+ * AES-128-CTR/XOR + a timestamp secondary header):
  *
  *   +------------------+------------------------+---------------------+--------+
  *   | SPP primary (6)  | TC secondary header(4) | XTEA(user data)     | CRC(2) |

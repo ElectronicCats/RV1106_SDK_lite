@@ -3,8 +3,9 @@
  *
  * XTEA (eXtended TEA): 64-bit block, 128-bit key, 32 Feistel rounds. Chosen
  * because it is tiny enough for the RISC-V MCU yet a real, published cipher —
- * exactly the profile the Zephyr FlatSat used for its "encrypted" telecommand
- * link.
+ * close in spirit to the profile FlatSat (ElectronicCats) uses for its
+ * "encrypted" telecommand link (that firmware uses AES-128-CTR/XOR — see
+ * docs/flatsat-protocol-comparison.md; XTEA is a lighter, self-contained variant).
  *
  * INTENTIONAL WEAKNESS (CTF): the mission key CCSDS_TC_KEY is FIXED and compiled
  * into the firmware (see ccsds_xtea.c). It is recoverable from a flash image

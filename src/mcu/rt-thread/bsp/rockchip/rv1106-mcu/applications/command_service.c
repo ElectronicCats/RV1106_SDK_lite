@@ -469,7 +469,7 @@ static int process_rx_packet(const uint8_t *buf, uint8_t len)
     if (((spp_be16_to_host(pkt.header.identification) >> 12) & 0x01) != SPP_PTYPE_TC)
         return -1;
 
-    /* Zephyr-style secured TC: if the frame carries the secondary header
+    /* ElectronicCats-style secured TC: if the frame carries the secondary header
      * (sec_hdr_flag=1), verify the CRC and XTEA-decrypt the args in place so the
      * APID handler below sees plaintext. WEAK BY DESIGN: the CRC result is
      * computed but NOT enforced, and a plaintext TC (sec_hdr_flag=0) is still
