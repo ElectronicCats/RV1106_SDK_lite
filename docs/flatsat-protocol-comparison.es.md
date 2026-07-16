@@ -254,14 +254,23 @@ necesario pero no suficiente — los formatos de frame de arriba siguen difirien
   dificultad 0 (payload en claro), ElectronicCats igual emite un secondary header
   de 4 B (timestamp) y un CRC de 2 B que el parser PWNSat/pwncube no espera. Las
   dificultades más altas añaden XOR/AES encima.
-- **pwncube ↔ ElectronicCats: ahora compatibles a nivel wire para TC** (esta
-  rama). Con la librería alineada (AES-128-CTR + timestamp + CRC-sobre-plaintext) y
-  el mismo nivel de dificultad en ambos extremos, un frame construido por
-  `ccsds_tc_build()` de pwncube lo acepta el `process_incoming_telecommand()` de
-  ElectronicCats y, al revés, `ccsds_tc_unsecure()` de pwncube descifra y verifica
-  el CRC de un TC seguro nativo de ElectronicCats. Primero hay que alinear el PHY
-  (ver la tabla RF). pwncube sigue aceptando frames planos PWNSat también, así que
-  habla ambos.
+- **pwncube ↔ ElectronicCats: ahora compatibles a nivel wire** (esta rama). Con la
+  librería alineada (AES-128-CTR + timestamp) y el mismo nivel de dificultad en
+  ambos extremos, un frame construido por `ccsds_tc_build()` de pwncube lo acepta
+  el `process_incoming_telecommand()` de ElectronicCats, y la crypto de pwncube
+  descifra frames nativos de ElectronicCats. Primero hay que alinear el PHY (ver
+  la tabla RF). pwncube sigue aceptando frames planos PWNSat también, así que habla
+  ambos.
+- **Verificado en hardware (TM cifrado nativo).** Un FlatSat (ElectronicCats) en
+  rol **SAT** con difficulty 3 transmitió su telemetría AES-128-CTR (APID 0x01F)
+  por RF a 918 MHz; la radio de pwncube la recibió (`crc=ok`, RSSI −87) y la
+  librería alineada la descifró a valores reales de sensores (temp 29.8 °C, press
+  81854 Pa, accel Z ≈ 1 g, **batería 4200 mV — coincide con el estado que el
+  propio FlatSat reportó**). Dos frames con 5 s de diferencia llevaban timestamps
+  distintos → IVs distintos → ciphertext distinto, ambos descifrando consistente.
+  Nota: el frame TM calcula su CRC sobre el **ciphertext** (verifica-luego-
+  descifra), mientras el TC lo calcula sobre el **plaintext** (descifra-luego-
+  verifica) — un matiz por-dirección del firmware ElectronicCats.
 
 Ver también: `applications/ccsds/README.md` (la librería de TC seguro),
 `docs/vulnerability-comparison.md` (vulns compartidas/porteadas),

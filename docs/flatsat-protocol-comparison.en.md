@@ -251,13 +251,22 @@ sufficient — the frame formats above still differ.
   (plaintext payload), ElectronicCats still emits a 4-byte timestamp secondary
   header and a 2-byte CRC that the PWNSat/pwncube parser does not expect. Higher
   difficulties add XOR/AES on top.
-- **pwncube ↔ ElectronicCats: now wire-compatible for TC** (this branch). With
-  the library aligned (AES-128-CTR + timestamp + CRC-over-plaintext) and the same
-  difficulty tier selected on both ends, a frame built by pwncube's
-  `ccsds_tc_build()` is accepted by ElectronicCats' `process_incoming_telecommand()`
-  and, conversely, pwncube's `ccsds_tc_unsecure()` decrypts and CRC-checks a native
-  ElectronicCats secured TC. The PHY still has to be aligned first (see the RF
-  table). pwncube keeps accepting plaintext PWNSat frames too, so it speaks both.
+- **pwncube ↔ ElectronicCats: now wire-compatible** (this branch). With the
+  library aligned (AES-128-CTR + timestamp) and the same difficulty tier on both
+  ends, a frame built by pwncube's `ccsds_tc_build()` is accepted by
+  ElectronicCats' `process_incoming_telecommand()`, and pwncube's crypto decrypts
+  native ElectronicCats frames. The PHY must be aligned first (see the RF table).
+  pwncube keeps accepting plaintext PWNSat frames too, so it speaks both.
+- **Verified on hardware (native encrypted TM).** A FlatSat (ElectronicCats) in
+  **SAT** role at difficulty 3 transmitted its AES-128-CTR telemetry (APID 0x01F)
+  over RF at 918 MHz; pwncube's radio received it (`crc=ok`, RSSI −87) and the
+  aligned library decrypted it to real sensor values (temp 29.8 °C, press
+  81854 Pa, accel Z ≈ 1 g, **battery 4200 mV — matching the FlatSat's own reported
+  state**). Two frames 5 s apart carried different timestamps → different IVs →
+  different ciphertext, both decrypting consistently. Note: the TM frame computes
+  its CRC over the **ciphertext** (verify-then-decrypt), whereas the TC frame
+  computes it over the **plaintext** (decrypt-then-verify) — a per-direction quirk
+  of the ElectronicCats firmware.
 
 See also: `applications/ccsds/README.md` (the secured-TC library),
 `docs/vulnerability-comparison.md` (shared/ported vulns), `docs/flatsat-port-changes.md`.
