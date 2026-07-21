@@ -65,6 +65,87 @@ source scripts/00-setup-toolchain.sh
 ./pkg/pkg.sh menuconfig              # TUI whiptail
 ```
 
+## Actualización del firmware (paso a paso)
+
+Actualizar es **compilar → empaquetar → cargar**. Puedes recompilar un solo
+componente o todo, pero la imagen que se flashea es siempre `update.img`.
+
+### 1. Compilar cada componente (individual)
+
+```bash
+source scripts/00-setup-toolchain.sh   # una vez por terminal
+
+./build.sh mcu       # firmware RISC-V del MCU (rtthread.bin)
+./build.sh uboot     # U-Boot (idblock, uboot, trust)
+./build.sh kernel    # kernel + DTB + boot.img
+./build.sh rootfs    # busybox + paquetes + rootfs
+```
+
+> ⚠️ **Orden que importa:** `uboot` **embebe** `rtthread.bin` dentro de
+> `uboot.img`/`trust.img`. Si tocas el MCU, corre **siempre** `./build.sh mcu`
+> **antes** de `./build.sh uboot`, o la placa arrancará con el MCU viejo.
+> Los paquetes se compilan tras el kernel; si editas un paquete, reconstrúyelo
+> con `./pkg/pkg.sh build-all` antes de `rootfs`.
+
+### 2. Compilar todo junto
+
+```bash
+./build.sh            # orden correcto: mcu → uboot → kernel → paquetes → rootfs → pack
+./build.sh rebuild    # igual pero con clean previo
+```
+
+### 3. Juntarlo en la imagen final
+
+```bash
+./build.sh pack       # combina todos los output/images/*.img en update.img
+```
+
+`./build.sh` (completo) ya hace este paso al final. Solo necesitas `pack`
+suelto si recompilaste un componente individual y quieres reempaquetar sin
+rebuild completo.
+
+### 4. Entrar en modo bootloader (maskrom) y cargar
+
+En la placa:
+
+1. **Mantén presionado el botón `BOOT`.**
+2. Sin soltar `BOOT`, **presiona y suelta `RST` (reset)**.
+3. Sigue sosteniendo `BOOT` ~**5 s** hasta que el host detecte el dispositivo
+   en modo maskrom; entonces suelta `BOOT`.
+
+**¿Cómo sé que está en maskrom?** Verifícalo desde el host:
+
+```bash
+sudo tools/upgrade_tool LD        # lista los dispositivos Rockchip conectados
+# Maskrom OK →  DevNo=1  Vid=0x2207,Pid=0x350a,...  Mode=Maskrom
+
+lsusb | grep 2207                 # alternativa: Rockchip = VID 0x2207
+# ID 2207:350a  → maskrom;  ID 2207:110a  → ya en modo Loader (U-Boot)
+```
+
+Si `LD` no lista nada o `lsusb` no muestra el `2207:xxxx`, la placa **no**
+entró en maskrom: repite la secuencia del botón. `Mode=Maskrom` (o `Loader`)
+es la única confirmación fiable antes de flashear.
+
+Con la placa ya en Linux, puedes entrar sin tocar botones con `reboot loader`
+desde el shell serie.
+
+Luego, desde el host:
+
+```bash
+./build.sh flash                              # = upgrade_tool UF output/images/update.img (sudo)
+# o directo:
+sudo tools/upgrade_tool UF output/images/update.img
+```
+
+> ⚠️ Usa **siempre `UF`** (imagen completa). `DI -b` responde "ok" pero **no
+> escribe** en esta SPI-NAND. Si flasheaste con el botón de recovery, **suéltalo
+> apenas empiece el flasheo** o el reboot posterior queda mudo.
+
+Detalle registro-a-registro del arranque, arranque dual A7+MCU y todos los
+gotchas: [`docs/migration/implementation/90-mcu-config-replication.md`](docs/migration/implementation/90-mcu-config-replication.md)
+y [`docs/migration/implementation/80-dual-boot.md`](docs/migration/implementation/80-dual-boot.md).
+
 ## Outputs
 
 Tras `./build.sh` en `output/images/`:
