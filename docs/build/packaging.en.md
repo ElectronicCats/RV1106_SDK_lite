@@ -15,6 +15,45 @@ afptool -pack  →  rkImageMaker -RK1106  →  update.img
 `rkImageMaker` prepends the Rockchip header and bootloader to produce the
 final flashable image.
 
+## Building and updating (build → pack → flash)
+
+Updating is **build → pack → load**. You can rebuild a single component or the
+whole tree; the image that gets flashed is always `update.img`.
+
+### 1. Individual components
+
+```bash
+source scripts/00-setup-toolchain.sh   # once per terminal
+
+./build.sh mcu       # RISC-V MCU firmware (rtthread.bin)
+./build.sh uboot     # U-Boot (idblock, uboot, trust)
+./build.sh kernel    # kernel + DTB + boot.img
+./build.sh rootfs    # busybox + packages + rootfs
+```
+
+> ⚠️ **Order matters:** `uboot` **embeds** `rtthread.bin` inside
+> `uboot.img`/`trust.img`. If you touch the MCU, **always** run `./build.sh mcu`
+> **before** `./build.sh uboot`, or the board boots the stale MCU. Packages are
+> built after the kernel; if you edit a package, rebuild it with
+> `./pkg/pkg.sh build-all` before `rootfs`.
+
+### 2. All together
+
+```bash
+./build.sh            # correct order: mcu → uboot → kernel → packages → rootfs → pack
+./build.sh rebuild    # same, with a clean first
+```
+
+### 3. Assemble the final image
+
+```bash
+./build.sh pack       # combines output/images/*.img into update.img
+```
+
+A full `./build.sh` already does this at the end; you only need a standalone
+`pack` if you rebuilt a single component and want to repackage without a full
+rebuild. Then flash (see [Flashing](#flashing)).
+
 ## Partition Layout
 
 Defined in `configs/board/rv1106-sdk.mk` via `RK_PARTITION_CMD_IN_ENV`:
@@ -85,15 +124,29 @@ sudo tools/upgrade_tool DI -idblock output/images/idblock.img
 
 ### Boot ROM (Maskrom) mode
 
-1. Hold the recovery key / press Maskrom button
-2. Power on the board
-3. Verify detection:
+Board button sequence:
 
-   ```bash
-   sudo tools/upgrade_tool LD
-   ```
+1. **Hold the `BOOT` button down.**
+2. Without releasing `BOOT`, **press and release `RST` (reset)**.
+3. Keep holding `BOOT` for ~**5 s** until the host detects the device in
+   maskrom mode; then release `BOOT`.
 
-4. Flash as above
+With the board already in Linux you can enter without touching buttons:
+`reboot loader` from the serial shell.
+
+**How do I know it's in maskrom?** Verify from the host:
+
+```bash
+sudo tools/upgrade_tool LD        # lists connected Rockchip devices
+# Maskrom OK →  DevNo=1  Vid=0x2207,Pid=0x350a,...  Mode=Maskrom
+
+lsusb | grep 2207                 # alternative: Rockchip = VID 0x2207
+# 2207:350a → maskrom;  2207:110a → already in Loader (U-Boot) mode
+```
+
+`Mode=Maskrom` (or `Loader`) is the only reliable confirmation. If `LD` lists
+nothing or no `2207:xxxx` shows up, the board did **not** enter maskrom: repeat
+the button sequence. Then flash as above.
 
 ## SDK File Layout
 
