@@ -27,7 +27,15 @@ invocación. El flag global **`-r 0|1`** selecciona el radio (por defecto 0). El
 chip pierde su configuración al apagar o resetear, así que una sesión siempre
 empieza con `init`.
 
-**Subcomandos de control:**
+Los subcomandos se dividen en **dos familias** (`radio_test help` las marca):
+
+- **Nativos** — control directo de la radio por *nuestra* `RadioService`
+  (endpoint rpmsg `0x4005`). Son los comandos que creamos nosotros.
+- **Heredados** — protocolo CCSDS de telecomando/telemetría **heredado del
+  firmware de referencia ElectronicCats/FlatSat** (que portamos para interop),
+  vía `CommandService` (`0x4008`) y `TelemetryService` (`0x4007`).
+
+**Nativos — RadioService (control directo del SX1262):**
 
 | Subcomando | Propósito |
 |------------|-----------|
@@ -48,9 +56,26 @@ empieza con `init`.
 | `rx [ms]` | Recibe (ventana ms, por defecto 10000, 0 = continuo) |
 | `loopback <freq> <txt> [txi rxi]` | Test radio0→radio1 en placa en un solo comando |
 
-(`radio_test` también trae subcomandos CCSDS/comando — `tcsend`, `tcbroad`,
-`cmd_*`, `tlm`, `ccsds` — que pertenecen a los docs de seguridad/telemetría y
-aquí solo se mencionan de pasada.)
+**Heredados — protocolo CCSDS/FlatSat (firmware portado):**
+
+Un telecomando (TC) es un CCSDS Space Packet; el MCU actúa sobre él igual que si
+hubiera llegado por RF. Los `tc*` inyectan por rpmsg (saltándose el aire);
+`ccsds` envía ese mismo formato **por la radio**.
+
+| Subcomando | Endpoint | Propósito |
+|------------|----------|-----------|
+| `ccsds <apid> [txt]` | Radio (`0x4005`) | TX de un paquete CCSDS SPP por el aire (formato heredado, transporte nativo) |
+| `tcsend <apid_hex> [pay_hex…]` | Command (`0x4008`) | Inyecta un TC en claro por rpmsg (salta el RF). Ej: `tcsend 04 00 0A` = thruster0=10 |
+| `tcsecsend <apid_hex> [pay_hex…]` | Command (`0x4008`) | Inyecta un TC **seguro** (sec-hdr timestamp + AES-128-CTR/XOR/plano + CRC-16); dificultad por env `CCSDS_DIFF` (debe coincidir con el receptor) |
+| `tcbroad <freq> [txt]` | Command (`0x4008`) | `TC_BROADCAST_MSG` (APID 0x06) en frecuencia arbitraria (430–960 MHz) |
+| `cmd_ping` / `cmd_start <freq>` / `cmd_stop` | Command (`0x4008`) | Ping / arranque (config uplink) / parada del servicio |
+| `cmd_status` / `cmd_config <freq> [sf bw cr]` | Command (`0x4008`) | Estado (thrusters, beacon, TC count) / reconfig del uplink |
+| `cmd_listen` / `cmd_watch` | Command (`0x4008`) | Stream de `EVT_TC_RX` / vista unificada TC+efecto |
+| `tlm` | Telemetry (`0x4007`) | Monitor del downlink (TM/beacon/idle/respuestas) |
+
+> El protocolo CCSDS SPP y su superficie de ataque se detallan en
+> [`../security/exploitation-guide.md`](../security/exploitation-guide.md); el
+> ruteo de endpoints rpmsg en [`../architecture/ipc-rpmsg.md`](../architecture/ipc-rpmsg.md).
 
 **Ejemplos de invocación:**
 

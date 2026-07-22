@@ -7,6 +7,9 @@ Docs are **bilingual (EN/ES)**. Each topic is `name.en.md` + `name.es.md` with `
 symlink to the active language. Switch with `./docs/switch.sh en|es` (or no argument to
 toggle).
 
+## Start here
+- [`getting-started.md`](getting-started.md) — **first time?** from zero: install dependencies, clone, build the image, and flash the board
+
 ## Architecture
 - [`architecture/overview.md`](architecture/overview.md) — the two cores, roles, boot, mission
 - [`architecture/ipc-rpmsg.md`](architecture/ipc-rpmsg.md) — Linux↔MCU rpmsg services & endpoints

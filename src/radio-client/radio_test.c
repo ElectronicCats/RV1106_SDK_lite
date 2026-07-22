@@ -36,93 +36,95 @@ static uint32_t g_src;   /* unique per-process src, so we can find our endpoint 
 static void usage(void)
 {
     puts(
-"radio_test — control de los SX1262 (radios 0 y 1) que posee el MCU RISC-V\n"
+"radio_test — test & control client for the two SX1262 radios owned by the MCU\n"
 "\n"
-"USO:  radio_test [-r N] <comando> [argumento]\n"
-"      -r N   selecciona la radio: 0 (SPI0, por defecto) o 1 (SPI1).\n"
+"Commands fall in two families:\n"
+"  NATIVE    — direct radio control, our own RadioService (rpmsg 0x4005).\n"
+"  INHERITED — CCSDS telecommand / telemetry protocol, ported from the\n"
+"              ElectronicCats FlatSat reference firmware for interop\n"
+"              (CommandService 0x4008, TelemetryService 0x4007).\n"
 "\n"
-"SECUENCIA TIPICA (el chip pierde su configuracion al apagar o resetear):\n"
-"  radio_test init 915000000    # 1) configurar: calibra y fija 915 MHz, 14 dBm\n"
-"  radio_test cw                # 2) portadora continua ON (espectrometro)\n"
-"  radio_test stop              # 3) portadora OFF (standby)\n"
+"USAGE:  radio_test [-r N] <command> [args]\n"
+"        -r N   select radio 0 (SPI0, default) or 1 (SPI1). Applies to NATIVE\n"
+"               commands; INHERITED ones target a service, not a radio.\n"
 "\n"
-"COMANDOS DE CONTROL:\n"
-"  ping                Verifica que el servicio del MCU responde (id=RDIO).\n"
-"  reset               Reset fisico del chip (pierde init; vuelve a standby).\n"
-"  init <freq_hz> [param=valor ...]\n"
-"                      Init + config individual de TX. Parametros nombrados en\n"
-"                      cualquier orden (los no dados usan el default):\n"
-"                        sf=5..12    bw=125|250|500   cr=1..4 (1=4/5..4=4/8)\n"
-"                        power=-9..22  pre=preamble(sim)  crc=on|off  iq=std|inv\n"
-"                        sync=pub|priv|<hex16>\n"
-"                      Default: SF7 BW250 CR4/5 pre8 CRC on 20dBm sync privada\n"
-"                      IQ std (OCP 140mA, LDRO auto, ganancia RX boosted).\n"
-"                      Ej: init 915000000 sf=9 bw=250 crc=off iq=inv\n"
-"                      Compat: init 915000000 7 125 1 20 (posicional sf bw cr pwr)\n"
-"  freq <freq_hz>      Cambia solo la frecuencia (requiere init previo).\n"
-"  power <dbm>         Potencia TX en dBm, -9 a 22 (requiere init previo).\n"
-"  cw                  Portadora continua ON (requiere init). Espectrometro.\n"
-"  stop                Standby: apaga portadora/RX. El init se conserva.\n"
-"  status              Estado. mode: 2=standby, 4=FS, 5=RX, 6=TX.\n"
-"  errors              Errores internos del chip (0x0000 = sano).\n"
-"  reg <addr_hex>      Lee un registro. Ej: reg 0740 (sync MSB; default 0x14).\n"
-"  wreg <addr_hex> <val> Escribe un registro. Ej: wreg 08E7 60 (OCP 60 mA).\n"
-"  sync <pub|priv|hex4> Sync word LoRa: pub=0x3444 (publica/LoRaWAN),\n"
-"                      priv=0x1424 (default), o hex de 16 bits (ej: 2B44).\n"
-"                      Ambos extremos DEBEN coincidir. Requiere init previo\n"
-"                      y se pierde con reset (re-aplicar tras init).\n"
-"  antsw <0|1|2>       Switch de antena: 0=auto, 1=TX, 2=RX.\n"
-"  mod <sf> <bw_khz> <cr> Configura modulacion LoRa: SF (5-12), BW en kHz\n"
-"                      (ej: 250), CR (1=4/5..4=4/8). Requiere init previo.\n"
-"  pkt <pre> <hdr> <plen> <crc> <iq> Configura params de paquete: preamble\n"
-"                      (8), hdr (0=variable, 1=fija), payload_len, CRC\n"
-"                      (0=off, 1=byte, 2=CCITT), IQ (0=std, 1=inv). El IQ queda\n"
-"                      pegajoso: se re-aplica en cada TX y RX hasta reiniciar.\n"
-"                      Ambos extremos deben usar la misma polaridad IQ.\n"
-"  pkts                Muestra RSSI y SNR del ultimo paquete recibido.\n"
-"  rssi                RSSI instantaneo (dBm).\n"
+"The SX1262 loses its configuration on power-off/reset, so most commands need a\n"
+"prior `init`. Typical spectrometer session:\n"
+"  radio_test init 915000000    # configure: calibrate + tune 915 MHz\n"
+"  radio_test cw                # continuous carrier ON\n"
+"  radio_test stop              # carrier OFF (standby)\n"
 "\n"
-"INYECCIÓN DE COMANDOS POR RPMsg (Equivalente a USB CDC de FlatSat):\n"
-"  tcsend <apid_hex> [payload_hex]   Inyecta un TC (telecomando) directamente\n"
-"                      al CommandService del MCU por rpmsg, saltÃ¡ndose la radio.\n"
-"                      apid_hex = APID de 2-3 dÃ­gitos hex (ej: 02 = reset, 07 = flash).\n"
-"                      payload_hex = opcional, bytes hex (ej: reset no necesita;\n"
-"                      thruster: 00 0A = thruster0 power 10).\n"
-"                      Ej: radio_test tcsend 02          # reset\n"
-"                      Ej: radio_test tcsend 04 000A      # thruster0=10\n"
-"                      Ej: radio_test tcsend 07           # flash\n"
-"  cmd_ping            Ping al CommandService (responde \"CMDS\" + version).\n"
-"  cmd_start <freq_hz> Inicia el CommandService (configura uplink).\n"
-"  cmd_stop            Detiene el CommandService.\n"
-"  cmd_status          Estado del CommandService: activo, thrusters, beacon, TC count.\n"
-"  cmd_config <freq> [sf] [bw] [cr]  Reconfigura uplink (freq en Hz, opcionales).\n"
-"  cmd_listen          Escucha eventos EVT_TC_RX del CommandService en tiempo\n"
-"                      real (uplink recibido). Ctrl+C para salir.\n"
-"  cmd_watch           Vista unificada: cada TC recibido + su efecto/respuesta\n"
-"                      (downlink o cambio de estado). Ctrl+C para salir.\n"
-"  tlm                 Monitor del downlink (TM/sync/idle/beacon/respuestas) via\n"
-"                      IPC: imprime cada frame SPP que baja el MCU. Ctrl+C salir.\n"
+"═══ NATIVE · link setup (RadioService) ═══\n"
+"  ping                 Check the RadioService answers (id \"RDIO\").\n"
+"  reset                Hardware-reset the chip (clears init → standby).\n"
+"  init <freq_hz> [k=v ...]\n"
+"                       Initialize + configure TX in one call. Named params in\n"
+"                       any order; anything unset takes the default:\n"
+"                         sf=5..12   bw=125|250|500   cr=1..4 (4/5..4/8)\n"
+"                         power=-9..22  pre=<preamble>  crc=on|off  iq=std|inv\n"
+"                         sync=pub|priv|<hex16>\n"
+"                       Defaults: SF7 BW250 CR4/5 pre8 CRC-on 20dBm sync=priv\n"
+"                       IQ=std (OCP 140mA, LDRO auto, RX gain boosted).\n"
+"                       Positional form also accepted: init <f> sf bw cr pwr.\n"
+"                       e.g. init 915000000 sf=9 bw=250 crc=off iq=inv\n"
+"  freq <freq_hz>       Retune only (keeps the rest of the config).\n"
+"  power <dbm>          TX power, -9..22 dBm.\n"
+"  sync <pub|priv|hex16>  LoRa sync word: pub=0x3444 (public/LoRaWAN),\n"
+"                       priv=0x1424 (default), or a raw 16-bit hex. Both ends\n"
+"                       MUST match; cleared by reset (re-apply after init).\n"
+"  mod <sf> <bw_khz> <cr>   Set modulation: SF, bandwidth in kHz, coding rate.\n"
+"  pkt <pre> <hdr> <plen> <crc> <iq>   Set packet params: preamble, header\n"
+"                       (0=variable, 1=fixed), payload len, CRC (0=off, 1=byte,\n"
+"                       2=CCITT), IQ (0=std, 1=inv). IQ is sticky: re-applied on\n"
+"                       every TX/RX until reset. Both ends need the same IQ.\n"
+"  antsw <0|1|2>        Antenna switch: 0=auto, 1=TX, 2=RX.\n"
 "\n"
-"PRUEBA BROADCAST CON FRECUENCIA ARBITRARIA:\n"
-"  tcbroad <freq_hz> [txt]  EnvÃ­a TC_BROADCAST_MSG (APID 0x06) con frecuencia\n"
-"                      y texto dados (bandas ISM limitadas a 430-960 MHz por el\n"
-"                      firmware del MCU). Ej: radio_test tcbroad 868000000 \"test\"\n"
+"═══ NATIVE · operate & measure (RadioService) ═══\n"
+"  cw                   Continuous carrier ON (needs init). Spectrometer source.\n"
+"  stop                 Standby: carrier/RX off; init is kept.\n"
+"  tx <text>            Transmit one LoRa packet; blocks until TX_DONE.\n"
+"  rx [ms]              Receive one packet (payload, RSSI, SNR, CRC). ms = listen\n"
+"                       window (default 10000, 0 = continuous). e.g. -r 1 rx 15000\n"
+"  loopback <freq_hz> <text>   On-board test in one shot: init both radios,\n"
+"                       listen on radio 1, transmit from radio 0 (close coupling).\n"
+"  status               Radio state (mode: 2=standby 4=FS 5=RX 6=TX).\n"
+"  errors               Chip error flags (0x0000 = healthy).\n"
+"  rssi                 Instantaneous RSSI (dBm).\n"
+"  pkts                 RSSI + SNR of the last received packet.\n"
+"  reg <addr_hex>       Read a chip register. e.g. reg 0740 (sync MSB).\n"
+"  wreg <addr_hex> <v>  Write a chip register. e.g. wreg 08E7 60 (OCP 60 mA).\n"
 "\n"
-"COMANDOS DE PAQUETES (LoRa, requieren init previo):\n"
-"  tx <texto>          Transmite un paquete LoRa con <texto>. Bloquea hasta\n"
-"                      TX_DONE. Ej: radio_test tx \"hola mundo\"\n"
-"  ccsds <apid> [txt]  TX paquete CCSDS SPP (header 6 bytes + payload). Muestra\n"
-"                      los bytes enviados para correlacionar con rx.\n"
-"                      Ej: radio_test ccsds 001 \"ping\"\n"
-"  rx [ms]             Escucha un paquete e imprime lo recibido (payload, RSSI,\n"
-"                      SNR, CRC). ms = ventana de escucha (por defecto 10000;\n"
-"                      0 = continuo). Ej: radio_test -r 1 rx 15000\n"
-"  help                Muestra esta ayuda.\n"
+"═══ INHERITED · CCSDS telecommands (ElectronicCats/FlatSat interop) ═══\n"
+"  A telecommand (TC) is a CCSDS Space Packet; the MCU acts on it exactly as if\n"
+"  it had arrived over RF. tc* inject via rpmsg (bypass the air); ccsds sends the\n"
+"  same packet format over the radio.\n"
+"  ccsds <apid> [text]  TX a CCSDS SPP packet (6-byte header + payload) over the\n"
+"                       radio (needs init). Prints the bytes sent. e.g. ccsds 001 ping\n"
+"  tcsend <apid_hex> [payload_hex ...]   Inject a plaintext TC straight into the\n"
+"                       CommandService over rpmsg. apid: 2-3 hex digits.\n"
+"                       e.g. tcsend 02 (reset), tcsend 04 00 0A (thruster0=10),\n"
+"                       tcsend 07 (flash).\n"
+"  tcsecsend <apid_hex> [payload_hex ...]   Inject a SECURED TC (timestamp\n"
+"                       secondary header + AES-128-CTR/XOR/plain + CRC-16) built\n"
+"                       with the shared ccsds library. Difficulty via env\n"
+"                       CCSDS_DIFF (0/1=plain, 2=XOR, >=3=AES; default 3) and it\n"
+"                       MUST match the receiver. e.g. tcsecsend 04 00 37\n"
+"  tcbroad <freq_hz> [text]   Send TC_BROADCAST_MSG (APID 0x06) on an arbitrary\n"
+"                       frequency (clamped to 430-960 MHz by the MCU).\n"
 "\n"
-"PRUEBA LOOPBACK EN LA PLACA (radio 0 -> radio 1, acoplo cercano):\n"
-"  loopback <freq_hz> <texto>   Test completo en un solo comando: inicializa\n"
-"                      ambas radios, pone la 1 a escuchar y transmite desde la 0.\n"
-"                      Ej: radio_test loopback 915000000 \"CubeSat!\"");
+"═══ INHERITED · CommandService control & monitoring ═══\n"
+"  cmd_ping             Ping the CommandService (replies \"CMDS\" + version).\n"
+"  cmd_start <freq_hz>  Start it (configure the uplink RX).\n"
+"  cmd_stop             Stop it.\n"
+"  cmd_status           State: active, thrusters, beacon, TC count.\n"
+"  cmd_config <freq> [sf] [bw] [cr]   Reconfigure the uplink (freq in Hz).\n"
+"  cmd_listen           Stream EVT_TC_RX events (raw uplink received). Ctrl+C.\n"
+"  cmd_watch            Unified view: each received TC + its effect/response\n"
+"                       (downlink or state change). Ctrl+C.\n"
+"  tlm                  Downlink monitor (TM/sync/idle/beacon/responses) via the\n"
+"                       TelemetryService: prints each SPP frame. Ctrl+C.\n"
+"\n"
+"  help                 Show this help.");
 }
 
 /* Read /sys/class/rpmsg/rpmsgN/src (the endpoint's local address), or -1. */
@@ -173,7 +175,7 @@ static int open_ept(void)
 
     ctrl = find_radio_ctrl();
     if (ctrl < 0) {
-        fprintf(stderr, "error: no encuentro el canal rpmsg-radio (¿arranco el MCU?).\n"
+        fprintf(stderr, "error: rpmsg-radio channel not found (did the MCU boot?).\n"
                         "Revisa: ls /sys/bus/rpmsg/devices/\n");
         return -1;
     }
@@ -199,7 +201,7 @@ static int open_ept(void)
         }
         usleep(20000);
     }
-    fprintf(stderr, "error: no aparecio el endpoint /dev/rpmsgN tras crearlo.\n");
+    fprintf(stderr, "error: /dev/rpmsgN endpoint did not appear after creating it.\n");
     return -1;
 }
 
@@ -226,7 +228,7 @@ static int open_named_ept_src(const char *chan, uint32_t dst, uint32_t src)
         }
     }
     if (ctrl >= 8) {
-        fprintf(stderr, "error: no encuentro el canal %s\n", chan);
+        fprintf(stderr, "error: channel %s not found\n", chan);
         return -1;
     }
     ept.src = src;
@@ -250,7 +252,7 @@ static int open_named_ept_src(const char *chan, uint32_t dst, uint32_t src)
         }
         usleep(20000);
     }
-    fprintf(stderr, "error: no aparecio el endpoint /dev/rpmsgN para %s.\n", chan);
+    fprintf(stderr, "error: /dev/rpmsgN endpoint did not appear for %s.\n", chan);
     return -1;
 }
 
@@ -304,7 +306,7 @@ static int need_arg(int have, const char *what)
 {
     if (have)
         return 0;
-    fprintf(stderr, "error: falta el argumento <%s>. Usa 'radio_test help'.\n", what);
+    fprintf(stderr, "error: missing argument <%s>. Run 'radio_test help'.\n", what);
     return 1;
 }
 
@@ -315,7 +317,7 @@ static const char *radio_err_str(uint8_t e)
     case 0x01: return "ERROR (SPI/comm)";
     case 0x02: return "ERROR (reset)";
     case 0x10: return "NOT_INITED (corre 'init' primero)";
-    default:   return "ERROR (desconocido)";
+    default:   return "ERROR (unknown)";
     }
 }
 
@@ -330,7 +332,7 @@ static const char *tc_apid_name(uint16_t apid)
     case 0x05: return "SET_BEACON_RATE";
     case 0x06: return "BROADCAST_MSG";
     case 0x07: return "FLASH (dump)";
-    default:   return "APID desconocido";
+    default:   return "APID unknown";
     }
 }
 
@@ -474,7 +476,7 @@ int main(int argc, char **argv)
         if (need_arg(argc >= 3, "freq_hz [sf=] [bw=] [cr=] [power=] [pre=] [crc=] [iq=] [sync=]")) return 2;
         freq = (uint32_t)strtoul(argv[2], NULL, 10);
         if (freq < 150000000U || freq > 960000000U) {
-            fprintf(stderr, "error: frecuencia fuera de rango (150000000-960000000 Hz).\n");
+            fprintf(stderr, "error: frequency out of range (150000000-960000000 Hz).\n");
             return 2;
         }
         for (i = 3; i < argc; i++) {
@@ -494,7 +496,7 @@ int main(int argc, char **argv)
                     else if (!strcmp(v, "priv") || !strcmp(v, "privada")) sw = 0x1424;
                     else sw = (uint16_t)strtoul(v, NULL, 16);
                     sync_set = 1;
-                } else { fprintf(stderr, "init: parametro desconocido '%s' (usa sf/bw/cr/power/pre/crc/iq/sync).\n", a); return 2; }
+                } else { fprintf(stderr, "init: unknown parameter '%s' (use sf/bw/cr/power/pre/crc/iq/sync).\n", a); return 2; }
             } else {
                 int val = atoi(a);
                 if      (pos == 0) sf  = val;
@@ -504,11 +506,11 @@ int main(int argc, char **argv)
                 pos++;
             }
         }
-        if (sf < 5 || sf > 12)     { fprintf(stderr, "error: sf 5-12.\n"); return 2; }
-        if (cr < 1 || cr > 4)      { fprintf(stderr, "error: cr 1-4 (1=4/5..4=4/8).\n"); return 2; }
-        if (pwr < -9 || pwr > 22)  { fprintf(stderr, "error: power -9..22 dBm.\n"); return 2; }
-        if (pre < 1 || pre > 65535){ fprintf(stderr, "error: preamble 1-65535.\n"); return 2; }
-        if (bw != 125 && bw != 250 && bw != 500) { fprintf(stderr, "error: bw 125/250/500 kHz.\n"); return 2; }
+        if (sf < 5 || sf > 12)     { fprintf(stderr, "error: sf must be 5-12.\n"); return 2; }
+        if (cr < 1 || cr > 4)      { fprintf(stderr, "error: cr must be 1-4 (1=4/5..4=4/8).\n"); return 2; }
+        if (pwr < -9 || pwr > 22)  { fprintf(stderr, "error: power must be -9..22 dBm.\n"); return 2; }
+        if (pre < 1 || pre > 65535){ fprintf(stderr, "error: preamble must be 1-65535.\n"); return 2; }
+        if (bw != 125 && bw != 250 && bw != 500) { fprintf(stderr, "error: bw must be 125/250/500 kHz.\n"); return 2; }
 
         fd = open_ept();
         if (fd < 0) return 1;
@@ -545,7 +547,7 @@ int main(int argc, char **argv)
         if (need_arg(argc >= 3, "freq_hz")) return 2;
         freq = (uint32_t)strtoul(argv[2], NULL, 10);
         if (freq < 150000000U || freq > 960000000U) {
-            fprintf(stderr, "error: frecuencia fuera de rango (150000000-960000000 Hz).\n");
+            fprintf(stderr, "error: frequency out of range (150000000-960000000 Hz).\n");
             return 2;
         }
         req[0] = 0x06;
@@ -556,7 +558,7 @@ int main(int argc, char **argv)
         int dbm;
         if (need_arg(argc >= 3, "dbm")) return 2;
         dbm = atoi(argv[2]);
-        if (dbm < -9 || dbm > 22) { fprintf(stderr, "error: potencia -9..22 dBm.\n"); return 2; }
+        if (dbm < -9 || dbm > 22) { fprintf(stderr, "error: power must be -9..22 dBm.\n"); return 2; }
         req[0] = 0x07; req[2] = (uint8_t)(int8_t)dbm; len = 3;
     }
     else if (!strcmp(cmd, "cw"))     req[0] = 0x08;
@@ -654,9 +656,9 @@ int main(int argc, char **argv)
         n = xfer(fd, frame, foff, rsp, sizeof(rsp), 3000);
         close_ept(fd);
 
-        if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        if (n < 2) { fprintf(stderr, "error: invalid response (n=%d)\n", n); return 1; }
         printf("tcsend: APID 0x%03X %s", apid, radio_err_str(rsp[1]));
-        if (rsp[1] == 0) printf(" (TC inyectado: %d bytes payload hex)", plen);
+        if (rsp[1] == 0) printf(" (TC injected: %d hex payload bytes)", plen);
         printf("\n");
         return rsp[1] ? 1 : 0;
     }
@@ -702,7 +704,7 @@ int main(int argc, char **argv)
         n = xfer(fd, frame, 1 + total, rsp, sizeof(rsp), 3000);
         close_ept(fd);
 
-        if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        if (n < 2) { fprintf(stderr, "error: invalid response (n=%d)\n", n); return 1; }
         printf("tcsecsend: APID 0x%03X %s", apid, radio_err_str(rsp[1]));
         if (rsp[1] == 0)
             printf(" (TC seguro EC: diff=%d ts=0x%08X, %d bytes wire, %d payload)",
@@ -754,7 +756,7 @@ int main(int argc, char **argv)
         n = xfer(fd, frame, off, rsp, sizeof(rsp), 3000);
         close_ept(fd);
 
-        if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        if (n < 2) { fprintf(stderr, "error: invalid response (n=%d)\n", n); return 1; }
         printf("tcbroad: freq=%u MHz txt=\"%s\" %s\n",
                freq_mhz, text, radio_err_str(rsp[1]));
         return rsp[1] ? 1 : 0;
@@ -765,7 +767,7 @@ int main(int argc, char **argv)
         if (fd < 0) return 1;
         n = xfer(fd, req, 1, rsp, sizeof(rsp), 3000);
         close_ept(fd);
-        if (n < 7) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        if (n < 7) { fprintf(stderr, "error: invalid response (n=%d)\n", n); return 1; }
         printf("cmd_ping: id=\"%c%c%c%c\" version=%d\n",
                rsp[2], rsp[3], rsp[4], rsp[5], rsp[6]);
         return rsp[1] ? 1 : 0;
@@ -781,7 +783,7 @@ int main(int argc, char **argv)
         if (fd < 0) return 1;
         n = xfer(fd, req, 6, rsp, sizeof(rsp), 3000);
         close_ept(fd);
-        if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        if (n < 2) { fprintf(stderr, "error: invalid response (n=%d)\n", n); return 1; }
         printf("cmd_start: %s\n", radio_err_str(rsp[1]));
         return rsp[1] ? 1 : 0;
     }
@@ -791,7 +793,7 @@ int main(int argc, char **argv)
         if (fd < 0) return 1;
         n = xfer(fd, req, 1, rsp, sizeof(rsp), 3000);
         close_ept(fd);
-        if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        if (n < 2) { fprintf(stderr, "error: invalid response (n=%d)\n", n); return 1; }
         printf("cmd_stop: %s\n", radio_err_str(rsp[1]));
         return rsp[1] ? 1 : 0;
     }
@@ -801,7 +803,7 @@ int main(int argc, char **argv)
         if (fd < 0) return 1;
         n = xfer(fd, req, 1, rsp, sizeof(rsp), 3000);
         close_ept(fd);
-        if (n < 11) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        if (n < 11) { fprintf(stderr, "error: invalid response (n=%d)\n", n); return 1; }
         printf("cmd_status: active=%d thruster=[%d,%d] beacon=%dms tx_count=%u\n",
                rsp[2], rsp[3], rsp[4],
                ((uint16_t)rsp[5] << 8) | rsp[6],
@@ -828,7 +830,7 @@ int main(int argc, char **argv)
         if (fd < 0) return 1;
         n = xfer(fd, req, 10, rsp, sizeof(rsp), 3000);
         close_ept(fd);
-        if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+        if (n < 2) { fprintf(stderr, "error: invalid response (n=%d)\n", n); return 1; }
         printf("cmd_config: freq=%u sf=%u bw=%u cr=%u %s\n",
                freq, sf, bw, cr, radio_err_str(rsp[1]));
         return rsp[1] ? 1 : 0;
@@ -839,7 +841,7 @@ int main(int argc, char **argv)
         fd = open_command_ept();
         if (fd < 0) return 1;
 
-        printf("cmd_listen: escuchando eventos EVT_TC_RX... (Ctrl+C para salir)\n");
+        printf("cmd_listen: listening for EVT_TC_RX events... (Ctrl+C to exit)\n");
         /* Send a PING first so the MCU registers our host address for event delivery */
         {
             uint8_t ping_req[2] = {0x01, 0};
@@ -885,7 +887,7 @@ int main(int argc, char **argv)
                                      0x7000 + (uint32_t)(getpid() & 0x0FFF));
         if (tfd < 0) { close_ept(cfd); return 1; }
 
-        printf("cmd_watch: TC recibidos + efecto/respuesta (Ctrl+C para salir)\n");
+        printf("cmd_watch: received TCs + effect/response (Ctrl+C to exit)\n");
         { uint8_t p[2] = {0x01, 0};    (void)xfer(cfd, p, 2, rsp, sizeof(rsp), 2000); }
         { uint8_t m[2] = {0x10, 0x01}; (void)xfer(tfd, m, 2, rsp, sizeof(rsp), 2000); }
 
@@ -907,7 +909,7 @@ int main(int argc, char **argv)
                     }
                     /* Effect of TCs that generate no downlink (read from the TC). */
                     if (apid == 0x04 && n >= 15)
-                        printf("   -> efecto: thruster%u potencia=%u (sin downlink; ver cmd_status)\n",
+                        printf("   -> effect: thruster%u power=%u (no downlink; see cmd_status)\n",
                                rsp[13], rsp[14]);
                     else if (apid == 0x05 && n >= 14)
                         printf("   -> efecto: beacon_rate=%us %s(sin downlink)\n",
@@ -923,7 +925,7 @@ int main(int argc, char **argv)
                 if (n == 2 && rsp[0] == 0x10) continue;   /* MONITOR echo */
                 if (n >= 6) {
                     uint16_t apid = (((uint16_t)rsp[0] << 8) | rsp[1]) & 0x07FF;
-                    printf("   <- respuesta: TM APID=0x%03X %s", apid, tm_apid_name(apid));
+                    printf("   <- response: TM APID=0x%03X %s", apid, tm_apid_name(apid));
                     if (n > 6) print_ascii_field(rsp, 6, n);
                     printf("\n");
                     fflush(stdout);
@@ -941,7 +943,7 @@ int main(int argc, char **argv)
          * transmits on the downlink. Equivalent to seeing the downlink without an SDR. */
         fd = open_telemetry_ept();
         if (fd < 0) return 1;
-        printf("tlm: monitor de downlink habilitado... (Ctrl+C para salir)\n");
+        printf("tlm: downlink monitor enabled... (Ctrl+C to exit)\n");
         {
             uint8_t mon_req[2] = {0x10, 0x01};   /* TELEM_CMD_MONITOR enable */
             (void)xfer(fd, mon_req, 2, rsp, sizeof(rsp), 2000);
@@ -1031,10 +1033,10 @@ int main(int argc, char **argv)
             close_ept(fd); return 1;
         }
         if (rx_ms)
-            printf("rx: escuchando radio %d por hasta %d segundos...\n",
+            printf("rx: listening on radio %d for up to %d seconds...\n",
                    inst, (rx_ms + 999) / 1000);
         else
-            printf("rx: escuchando radio %d (continuo, Ctrl-C para salir)...\n", inst);
+            printf("rx: listening on radio %d (continuous, Ctrl-C to exit)...\n", inst);
         /* Loop: receive ALL packets within the window */
         for (;;) {
             int rc = wait_rx_event(fd, total_timeout);
@@ -1060,7 +1062,7 @@ int main(int argc, char **argv)
         text = argv[3];
         if (argc >= 6) { txi = atoi(argv[4]); rxi = atoi(argv[5]); }
         if (txi < 0 || txi > 1 || rxi < 0 || rxi > 1 || txi == rxi) {
-            fprintf(stderr, "error: tx/rx deben ser 0 y 1 distintos.\n"); return 2;
+            fprintf(stderr, "error: tx/rx must be 0 and 1, distinct.\n"); return 2;
         }
         plen = (int)strlen(text); if (plen > 250) plen = 250;
 
@@ -1078,7 +1080,7 @@ int main(int argc, char **argv)
         { uint8_t r[4] = { 0x0E, (uint8_t)rxi, (8000>>8)&0xFF, 8000&0xFF };
           n = xfer(fd, r, 4, m, sizeof(m), 3000);
           if (n < 2 || m[1] != 0) { fprintf(stderr, "rx_start radio %d fallo\n", rxi); close_ept(fd); return 1; } }
-        printf("loopback: radio %d escuchando; radio %d transmite \"%s\"...\n", rxi, txi, text);
+        printf("loopback: radio %d listening; radio %d transmitting \"%s\"...\n", rxi, txi, text);
         /* tx radio transmits (reply arrives after TX_DONE) */
         { uint8_t r[512] = { 0x0D, (uint8_t)txi, (uint8_t)plen }; memcpy(&r[3], text, plen);
           n = xfer(fd, r, 3 + plen, m, sizeof(m), 6000); }
@@ -1094,7 +1096,7 @@ int main(int argc, char **argv)
                 printf("\"\n");
                 got_evt = 1; rc = (m[2]&1)?0:1; break;
             }
-            else if (m[0] == EVT_RX_TIMEOUT) { printf("loopback: RX timeout (radio 1 no recibio)\n"); break; }
+            else if (m[0] == EVT_RX_TIMEOUT) { printf("loopback: RX timeout (radio 1 received nothing)\n"); break; }
             n = rx_msg(fd, m, sizeof(m), 9000);
         }
         if (!got_evt && rc) fprintf(stderr, "loopback: sin evento de RX\n");
@@ -1102,7 +1104,7 @@ int main(int argc, char **argv)
         return rc;
     }
     else {
-        fprintf(stderr, "error: comando desconocido '%s'. Usa 'radio_test help'.\n", cmd);
+        fprintf(stderr, "error: unknown command '%s'. Run 'radio_test help'.\n", cmd);
         return 2;
     }
 
@@ -1111,7 +1113,7 @@ int main(int argc, char **argv)
 
     n = xfer(fd, req, len, rsp, sizeof(rsp), tmo);
     close_ept(fd);
-    if (n < 2) { fprintf(stderr, "error: respuesta invalida (n=%d)\n", n); return 1; }
+    if (n < 2) { fprintf(stderr, "error: invalid response (n=%d)\n", n); return 1; }
 
     if (rsp[1] == RADIO_ERR_NOT_INITED) {
         fprintf(stderr, "radio sin configurar (la configuracion se pierde al apagar/reset).\n"

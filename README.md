@@ -12,6 +12,9 @@ Board: RV1106 SDK (SPI NAND, 256 MB)
 > RISC-V) y todo el código fuente (kernel, U-Boot, rkbin, RT-Thread BSP) están
 > versionados. Tras clonar, `./build.sh` produce `update.img` sin descargas.
 
+> 🚀 **¿Primera vez?** Sigue el tutorial desde cero (instalar dependencias →
+> clonar → compilar → flashear): [`docs/getting-started.md`](docs/getting-started.md).
+
 ## Componentes
 
 | Componente | Versión |

@@ -6,6 +6,9 @@ arquitectura, luego build, y después los docs por dispositivo y de seguridad.
 Los docs son **bilingües (EN/ES)**. Cada tema es `name.en.md` + `name.es.md` con `name.md` un
 symlink al idioma activo. Cambia con `./docs/switch.sh en|es` (o sin argumento para alternar).
 
+## Empieza aquí
+- [`getting-started.md`](getting-started.md) — **¿primera vez?** desde cero: instalar dependencias, clonar, compilar la imagen y flashear la placa
+
 ## Arquitectura
 - [`architecture/overview.md`](architecture/overview.md) — los dos núcleos, roles, boot, misión
 - [`architecture/ipc-rpmsg.md`](architecture/ipc-rpmsg.md) — servicios y endpoints rpmsg Linux↔MCU
