@@ -109,19 +109,20 @@ if [ -f "${ITB}" ]; then
         echo "[*] uboot.itb = ${ITB_B} B (${ITB_KB}K) fits the ${FIT_KB}K uboot partition ($(( (LIMIT_B - ITB_B) / 1024 ))K free)"
     else
         REC_KB=$(rk_roundup_256 "${ITB_KB}")
-        echo ""                                                                        >&2
-        echo "ERROR: uboot.itb does not fit the uboot partition."                      >&2
-        echo "  embedded MCU firmware: ${MCU_FW_KB}K"                                   >&2
-        echo "  uboot.itb (full):     ${ITB_B} B (${ITB_KB}K)"                          >&2
-        echo "  uboot partition:      ${LIMIT_B} B (${FIT_KB}K)"                        >&2
-        echo "  exceeds by:           $(( ITB_B - LIMIT_B )) B ($(( (ITB_B - LIMIT_B + 1023) / 1024 ))K)" >&2
-        echo "  recommended size:     ${REC_KB}K  — raise RK_UBOOT_BASE_KB in scripts/lib-layout.sh or trim the MCU firmware" >&2
+        C_RED="\e[31;1m"; C_OFF="\e[0m"
+        echo ""                                                                                    >&2
+        echo -e "${C_RED}ERROR: uboot.itb does not fit the uboot partition.${C_OFF}"               >&2
+        echo -e "${C_RED}  embedded MCU firmware: ${MCU_FW_KB}K${C_OFF}"                            >&2
+        echo -e "${C_RED}  uboot.itb (full):     ${ITB_B} B (${ITB_KB}K)${C_OFF}"                   >&2
+        echo -e "${C_RED}  uboot partition:      ${LIMIT_B} B (${FIT_KB}K)${C_OFF}"                 >&2
+        echo -e "${C_RED}  exceeds by:           $(( ITB_B - LIMIT_B )) B ($(( (ITB_B - LIMIT_B + 1023) / 1024 ))K)${C_OFF}" >&2
+        echo -e "${C_RED}  recommended size:     ${REC_KB}K  — raise RK_UBOOT_BASE_KB in scripts/lib-layout.sh or trim the MCU firmware${C_OFF}" >&2
         exit 1
     fi
 fi
 
 if [ "${MAKE_RC}" -ne 0 ]; then
-    echo "ERROR: U-Boot build (make.sh) failed with code ${MAKE_RC}" >&2
+    echo -e "\e[31;1mERROR: U-Boot build (make.sh) failed with code ${MAKE_RC}\e[0m" >&2
     exit "${MAKE_RC}"
 fi
 
