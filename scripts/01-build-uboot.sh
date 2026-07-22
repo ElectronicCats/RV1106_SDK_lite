@@ -54,6 +54,18 @@ fi
 echo "[*] Copying defconfig to U-Boot source tree"
 cp -v "${DEFCONFIG_SRC}" "${DEFCONFIG_DST}"
 
+# 2b) Recalculate CONFIG_SPL_FIT_IMAGE_KB at build time so uboot.itb (which
+# embeds the MCU rtthread.bin) is sized to the actual firmware. Must match the
+# uboot partition size that 04-pack-image.sh derives from the same firmware.
+source "${SDK_DIR}/scripts/lib-layout.sh"
+FIT_KB=$(rk_uboot_fit_kb "${RKBIN_DIR}/bin/rv11/rtthread.bin")
+echo "[*] Sizing uboot FIT (CONFIG_SPL_FIT_IMAGE_KB) to ${FIT_KB}K for embedded rtthread.bin"
+if grep -q '^CONFIG_SPL_FIT_IMAGE_KB=' "${DEFCONFIG_DST}"; then
+    sed -i "s/^CONFIG_SPL_FIT_IMAGE_KB=.*/CONFIG_SPL_FIT_IMAGE_KB=${FIT_KB}/" "${DEFCONFIG_DST}"
+else
+    echo "CONFIG_SPL_FIT_IMAGE_KB=${FIT_KB}" >> "${DEFCONFIG_DST}"
+fi
+
 # 3) Run defconfig step via make.sh
 echo ""
 echo "[*] Running: make -C ${UBOOT_SRC} ${DEFCONFIG_NAME}"

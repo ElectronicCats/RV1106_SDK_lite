@@ -139,6 +139,15 @@ main() {
         msg_error "Example: 32K(env),512K@32K(idblock),256K(uboot),32M(boot),256M(userdata),-(rootfs)"
         exit 1
     fi
+
+    # Recalculate the layout at build time from the actual MCU firmware size:
+    # the uboot partition (and meta/boot after it) must be large enough to hold
+    # the rtthread.bin embedded in uboot.itb. Must match the CONFIG_SPL_FIT_IMAGE_KB
+    # that 01-build-uboot.sh derived from the same firmware.
+    source "$SDK_DIR/scripts/lib-layout.sh"
+    _fit_kb=$(rk_uboot_fit_kb "$SDK_DIR/src/rkbin/bin/rv11/rtthread.bin")
+    RK_PARTITION_CMD_IN_ENV="$(rk_partition_layout "$_fit_kb")"
+    msg_info "Firmware-driven layout: uboot=${_fit_kb}K"
     msg_info "Partition layout: $RK_PARTITION_CMD_IN_ENV"
 
     # Boot medium
