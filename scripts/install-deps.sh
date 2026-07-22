@@ -26,8 +26,28 @@ fi
 SUDO=""
 [ "$(id -u)" -ne 0 ] && SUDO="sudo"
 
-echo "[deps] Installing host build dependencies (apt)..."
-${SUDO} apt-get update
+echo "[deps] Updating package lists..."
+if ! ${SUDO} apt-get update; then
+    echo "[deps] WARNING: 'apt-get update' failed — check network / apt sources." >&2
+fi
+
+# Preflight: on a machine with no working repositories the apt cache is empty and
+# EVERY package "cannot be located" (git, gcc, make included). Detect that up
+# front with a core package that lives in Debian/Ubuntu 'main', and explain what
+# to fix — instead of dumping a wall of "unable to locate" errors.
+if ! apt-cache show git >/dev/null 2>&1; then
+    echo ""                                                                            >&2
+    echo "[deps] ERROR: apt has no packages available — the repositories are not set up." >&2
+    echo "[deps] On a fresh Debian/Ubuntu this usually means one of:"                   >&2
+    echo "         - no network access (apt cannot reach the mirrors)"                  >&2
+    echo "         - /etc/apt/sources.list is empty or points only to the install CD"   >&2
+    echo "         - Ubuntu: the 'universe' component is not enabled"                    >&2
+    echo "       Fix the repos + network, run '${SUDO} apt-get update' until it pulls a" >&2
+    echo "       package index, then re-run ./build.sh deps."                           >&2
+    exit 1
+fi
+
+echo "[deps] Installing host build dependencies..."
 # shellcheck disable=SC2086
 ${SUDO} apt-get install -y ${PKGS}
 
