@@ -29,12 +29,16 @@ Board: RV1106 SDK (SPI NAND, 256 MB)
 
 ## Requisitos
 
+Instala todas las dependencias del host con **un solo comando**:
+
 ```bash
-sudo apt-get install -y git make gcc gcc-multilib g++ g++-multilib \
-    gawk texinfo libssl-dev bison flex fakeroot cmake unzip gperf \
-    autoconf device-tree-compiler libncurses5-dev pkg-config bc python3 cpio rsync \
-    scons                      # scons: requerido para el firmware del MCU (RT-Thread)
+./build.sh deps        # = ./scripts/install-deps.sh (apt, Debian/Ubuntu)
 ```
+
+Instala: `git make gcc g++ bc cpio rsync fakeroot bison flex libssl-dev
+device-tree-compiler scons gawk texinfo cmake unzip gperf autoconf
+libncurses5-dev pkg-config python3` (los toolchains ARM y RISC-V ya vienen
+versionados). `scons` es imprescindible para el firmware del MCU (RT-Thread).
 
 ## Uso
 

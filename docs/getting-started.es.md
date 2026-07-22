@@ -34,8 +34,14 @@ clonar **no se descarga nada más** — no necesitas la red durante la compilaci
 
 ## 1. Instalar las dependencias del host
 
-Un único comando. Son paquetes del sistema para compilar el kernel, U-Boot y el
-firmware del MCU:
+Un único comando (necesitas el repo ya clonado — ver paso 2, o clónalo antes):
+
+```bash
+./build.sh deps        # = ./scripts/install-deps.sh (apt, Debian/Ubuntu)
+```
+
+Instala todos los paquetes del sistema para compilar el kernel, U-Boot y el
+firmware del MCU. Equivale a:
 
 ```bash
 sudo apt-get update

@@ -2,6 +2,10 @@
 # RV1106 SDK - Entry point
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# 'deps' needs no toolchain — handle it before sourcing anything that checks for one.
+if [ "${1:-}" = "deps" ]; then exec bash scripts/install-deps.sh; fi
+
 source scripts/00-setup-toolchain.sh
 source scripts/functions.sh
 
@@ -11,6 +15,7 @@ case "${1:-}" in
         echo "Usage: $0 <command>"
         echo ""
         echo "Commands:"
+        echo "  deps           Install all host build dependencies (apt, one command)"
         echo "  (no args)      Full build: clean + uboot + kernel + rootfs + packages + pack"
         echo "  rebuild        Same as full build (clean + build all)"
         echo "  clean          Remove output/ and distclean uboot/kernel"

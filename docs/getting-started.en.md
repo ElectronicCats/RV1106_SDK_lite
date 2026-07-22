@@ -35,8 +35,14 @@ build.
 
 ## 1. Install the host dependencies
 
-One command. These are system packages to build the kernel, U-Boot, and the MCU
-firmware:
+One command (needs the repo already cloned — see step 2, or clone it first):
+
+```bash
+./build.sh deps        # = ./scripts/install-deps.sh (apt, Debian/Ubuntu)
+```
+
+Installs every system package needed to build the kernel, U-Boot, and the MCU
+firmware. Equivalent to:
 
 ```bash
 sudo apt-get update
