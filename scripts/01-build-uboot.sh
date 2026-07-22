@@ -58,8 +58,10 @@ cp -v "${DEFCONFIG_SRC}" "${DEFCONFIG_DST}"
 # embeds the MCU rtthread.bin) is sized to the actual firmware. Must match the
 # uboot partition size that 04-pack-image.sh derives from the same firmware.
 source "${SDK_DIR}/scripts/lib-layout.sh"
-FIT_KB=$(rk_uboot_fit_kb "${RKBIN_DIR}/bin/rv11/rtthread.bin")
-echo "[*] Sizing uboot FIT (CONFIG_SPL_FIT_IMAGE_KB) to ${FIT_KB}K for embedded rtthread.bin"
+MCU_FW="${RKBIN_DIR}/bin/rv11/rtthread.bin"
+FIT_KB=$(rk_uboot_fit_kb "${MCU_FW}")
+MCU_FW_KB=0; [ -f "${MCU_FW}" ] && MCU_FW_KB=$(( ( $(stat -c %s "${MCU_FW}") + 1023 ) / 1024 ))
+echo "[*] Sizing uboot FIT (CONFIG_SPL_FIT_IMAGE_KB) to ${FIT_KB}K  (MCU firmware ${MCU_FW_KB}K + base ${RK_UBOOT_BASE_KB}K, rounded up to 256K)"
 if grep -q '^CONFIG_SPL_FIT_IMAGE_KB=' "${DEFCONFIG_DST}"; then
     sed -i "s/^CONFIG_SPL_FIT_IMAGE_KB=.*/CONFIG_SPL_FIT_IMAGE_KB=${FIT_KB}/" "${DEFCONFIG_DST}"
 else
@@ -88,8 +90,40 @@ fi
 echo ""
 echo "[*] Running: cd ${UBOOT_SRC} && ./make.sh --spl-new CROSS_COMPILE=${CROSS_COMPILE}"
 cd "${UBOOT_SRC}"
+set +e
 ./make.sh --spl-new "CROSS_COMPILE=${CROSS_COMPILE}"
+MAKE_RC=$?
+set -e
 cd "${SCRIPT_DIR}"
+
+# 4b) Report the real uboot.itb size against the partition we sized for. If it
+# still overflows (e.g. U-Boot proper outgrew the base budget), show the full
+# size, by how much it exceeds, and the recommended size — the upstream
+# "actual/max limit" message is cryptic and doesn't say what to do.
+ITB="${UBOOT_SRC}/fit/uboot.itb"
+if [ -f "${ITB}" ]; then
+    ITB_B=$(stat -c %s "${ITB}")
+    ITB_KB=$(( (ITB_B + 1023) / 1024 ))
+    LIMIT_B=$(( FIT_KB * 1024 ))
+    if [ "${ITB_B}" -le "${LIMIT_B}" ]; then
+        echo "[*] uboot.itb = ${ITB_B} B (${ITB_KB}K) fits the ${FIT_KB}K uboot partition ($(( (LIMIT_B - ITB_B) / 1024 ))K free)"
+    else
+        REC_KB=$(rk_roundup_256 "${ITB_KB}")
+        echo ""                                                                        >&2
+        echo "ERROR: uboot.itb does not fit the uboot partition."                      >&2
+        echo "  embedded MCU firmware: ${MCU_FW_KB}K"                                   >&2
+        echo "  uboot.itb (full):     ${ITB_B} B (${ITB_KB}K)"                          >&2
+        echo "  uboot partition:      ${LIMIT_B} B (${FIT_KB}K)"                        >&2
+        echo "  exceeds by:           $(( ITB_B - LIMIT_B )) B ($(( (ITB_B - LIMIT_B + 1023) / 1024 ))K)" >&2
+        echo "  recommended size:     ${REC_KB}K  — raise RK_UBOOT_BASE_KB in scripts/lib-layout.sh or trim the MCU firmware" >&2
+        exit 1
+    fi
+fi
+
+if [ "${MAKE_RC}" -ne 0 ]; then
+    echo "ERROR: U-Boot build (make.sh) failed with code ${MAKE_RC}" >&2
+    exit "${MAKE_RC}"
+fi
 
 # 5) Locate and copy generated images to output/
 echo ""
