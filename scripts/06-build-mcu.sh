@@ -68,8 +68,18 @@ cp "board/${BOARD}/defconfig" .config
 scons --useconfig="board/${BOARD}/defconfig" >/dev/null 2>&1 || err "config generation failed"
 
 log "Compiling RT-Thread firmware..."
+# Drop the previous binary first: scons leaves it in place when it aborts while
+# reading the SConscripts, and a stale rtthread.bin would silently pass the
+# check below and get staged into the loader. The .elf goes too — rtthread.bin
+# is produced by a post-link objcopy, which only runs when the .elf relinks.
+rm -f rtthread.bin rtthread.elf
 # Filter benign python3 regex SyntaxWarnings from the vendored RT-Thread tools.
-scons -j"$(nproc)" 2>&1 | grep -vE 'SyntaxWarning|re\.(search|findall)|stdc =' || true
+# grep is last in the pipe, so scons' own status comes from PIPESTATUS.
+set +e
+scons -j"$(nproc)" 2>&1 | grep -vE 'SyntaxWarning|re\.(search|findall)|stdc ='
+SCONS_RC=${PIPESTATUS[0]}
+set -e
+[ "${SCONS_RC}" -eq 0 ] || err "build failed: scons exited with code ${SCONS_RC}"
 
 [ -f rtthread.bin ] || err "build failed: rtthread.bin not produced"
 

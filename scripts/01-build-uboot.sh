@@ -75,9 +75,21 @@ make -C "${UBOOT_SRC}" "${DEFCONFIG_NAME}"
 
 # 3b) Override SPL boot order for SPI NAND only (skip MMC to avoid timeout delays)
 # Set BOOT_MEDIUM=spi_nand in environment or board config to enable
+dtsi="${UBOOT_SRC}/arch/arm/dts/rv1106-u-boot.dtsi"
+dtsi_bak="${dtsi}.bak"
+
+# Put the vendored dtsi back however we leave: an aborted build (e.g. the FIT
+# overflowing the uboot partition) used to leave the tree patched and the .bak
+# orphaned, which then shows up as a dirty working tree.
+restore_dtsi() {
+    if [ -f "${dtsi_bak}" ]; then
+        mv "${dtsi_bak}" "${dtsi}"
+        echo "[*] Restored original rv1106-u-boot.dtsi"
+    fi
+}
+trap restore_dtsi EXIT
+
 if [ "${BOOT_MEDIUM:-}" = "spi_nand" ]; then
-    dtsi="${UBOOT_SRC}/arch/arm/dts/rv1106-u-boot.dtsi"
-    dtsi_bak="${UBOOT_SRC}/arch/arm/dts/rv1106-u-boot.dtsi.bak"
     if [ -f "$dtsi" ] && ! grep -q "= &spi_nand, &emmc" "$dtsi"; then
         cp "$dtsi" "$dtsi_bak"
         sed -i 's/u-boot,spl-boot-order = .*;/u-boot,spl-boot-order = \&spi_nand, \&emmc;/' "$dtsi"
@@ -178,10 +190,7 @@ fi
 # 6) Clean up build artifacts from source tree (but keep the source itself)
 echo ""
 echo "[*] Cleaning source tree build artifacts"
-if [ -f "${UBOOT_SRC}/arch/arm/dts/rv1106-u-boot.dtsi.bak" ]; then
-    mv "${UBOOT_SRC}/arch/arm/dts/rv1106-u-boot.dtsi.bak" "${UBOOT_SRC}/arch/arm/dts/rv1106-u-boot.dtsi"
-    echo "[*] Restored original rv1106-u-boot.dtsi"
-fi
+restore_dtsi   # no-op if step 3b never patched it, or the trap already ran
 cd "${UBOOT_SRC}"
 make distclean 2>/dev/null || true
 rm -f "${DEFCONFIG_DST}"  # remove our local copy of the defconfig
