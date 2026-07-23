@@ -196,6 +196,7 @@ per-component build/pack/flash guide is in
 | `scons not installed` | `scons` missing (step 1): `sudo apt-get install scons`. |
 | MCU didn't update | You rebuilt `uboot` without rebuilding `mcu` first. U-Boot embeds `rtthread.bin`: run `mcu` then `uboot`. |
 | `upgrade_tool` doesn't detect the board | Not in maskrom (repeat 5.1), non-data USB cable, or missing `sudo`. Check with `lsusb \| grep 2207`. |
+| `Download Boot Fail` / `please check ddr` | Maskrom goes stale after retries. **One maskrom entry = one `UF` attempt**: if it fails, re-enter maskrom (5.1) and flash on the **first** try, not in a loop. |
 | Flashes but won't boot | Always use **`UF`** (full image). `DI -b` replies "ok" but **does not write** on this SPI-NAND. `sudo ./build.sh flash` already uses `UF`. |
 | Flash without `sudo` | Create `/etc/udev/rules.d/99-rockchip.rules` with:<br>`SUBSYSTEM=="usb", ATTR{idVendor}=="2207", MODE="0666"`<br>then `sudo udevadm control --reload && sudo udevadm trigger`. |
 

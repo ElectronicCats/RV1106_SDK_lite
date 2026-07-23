@@ -65,15 +65,35 @@ Variables available in `package.mk`:
 - `PKG_INSTALL_DIR` — temp install directory
 - `ROOTFS_DIR` — rootfs staging area
 
-## Writing a New Package
+## MCU client packages
+
+The userspace tools that talk to the RISC-V coprocessor over `/dev/rpmsg` ship
+as packages (enabled in `package-config`):
+
+| Package | Binary | Talks to |
+|---------|--------|----------|
+| `radio-client` | `radio_test` | RadioService (SX1262) |
+| `sensor-client` | `sensor_test` | SensorService (BME280 + ICM-42670) |
+| `telemetry-client` | `telemetry_test` | TelemetryService (CCSDS) |
+| `mcu-tool` | `mcutool` | MCU load/reset via `/dev/mem` |
+
+## Rules When Writing a New Package
 
 ```
 src/<name>/       # source code (Makefile + sources)
-  ├── Makefile
-  └── main.c
-
 pkg/available/<name>/package.mk   # package descriptor
 ```
+
+Two non-obvious points that break the build silently:
+
+- **Root paths at `BASE_DIR`, never relative.** `pkg_build` compiles in an
+  isolated `PKG_BUILD_DIR`, so a `../other-dir` will not resolve. If your package
+  needs sources from another tree (e.g. `radio_test` reuses the MCU firmware's
+  CCSDS library), root them at `${BASE_DIR}/...`. The package manager exports
+  `BASE_DIR` to every package.
+- **A failing package aborts the whole phase** (`build-all` runs under
+  `set -e`): packages after it never build. Verify yours compiles in isolation
+  before trusting it.
 
 Enable and build:
 
@@ -82,6 +102,10 @@ bash pkg.sh enable <name>
 bash pkg.sh build <name>
 bash pkg.sh install <name>
 ```
+
+> Source lives under `src/`, which is `.gitignore`d with a whitelist: add
+> `!src/<name>` (and a rule to ignore the compiled binary) or a fresh clone will
+> not have your package.
 
 ---
 
