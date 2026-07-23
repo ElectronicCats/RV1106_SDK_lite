@@ -13,3 +13,7 @@ PKG_ENABLE_telemetry-client=y
 # del mapa de registros (portado a applications/icm42670.c en el firmware).
 # PKG_ENABLE_icm42670=y
 PKG_ENABLE_sensor-client=y
+# mcu-tool (mcutool): hot-load/reset/release the RISC-V MCU from Linux via
+# /dev/mem. Dev aid to iterate MCU firmware without a full reflash. Needs
+# CONFIG_DEVMEM=y in the kernel.
+PKG_ENABLE_mcu-tool=y

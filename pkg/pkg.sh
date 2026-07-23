@@ -90,7 +90,7 @@ resolve_deps() {
 build_one() {
     local name="$1" mk="${AVAILABLE}/${name}/package.mk" bdir="${BUILD_BASE}/${name}/build" idir="${BUILD_BASE}/${name}/install"
     rm -rf "$bdir" "$idir"; mkdir -p "$bdir" "$idir"
-    export CROSS_COMPILE ARCH ROOTFS_DIR SYSROOT="${SYSROOT:-}" PKG_SOURCE_DIR="${SRC_CACHE}" PKG_BUILD_DIR="$bdir" PKG_INSTALL_DIR="$idir"
+    export BASE_DIR CROSS_COMPILE ARCH ROOTFS_DIR SYSROOT="${SYSROOT:-}" PKG_SOURCE_DIR="${SRC_CACHE}" PKG_BUILD_DIR="$bdir" PKG_INSTALL_DIR="$idir"
     (source "$mk"; for dep in ${PKG_DEPENDS:-}; do build_one "$dep"; done; echo "[pkg] Build: $name"; pkg_build; pkg_install)
 }
 

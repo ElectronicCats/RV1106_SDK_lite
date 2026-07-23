@@ -8,6 +8,13 @@ src/*
 !src/icm42670-kmod
 !src/radio-client
 !src/sensor-client
+!src/telemetry-client
+!src/mcu-tool
+# ...but not the compiled client binaries (the .c sources are the source of truth).
+src/radio-client/radio_test
+src/sensor-client/sensor_test
+src/telemetry-client/telemetry_test
+src/mcu-tool/mcutool
 # RISC-V MCU (RT-Thread) BSP source — needed to build rtthread.bin from a clean
 # clone. Build artifacts are re-excluded below.
 !src/mcu
